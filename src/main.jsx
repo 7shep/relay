@@ -25,14 +25,14 @@ const pullRequests = [
   { id: 'p4', number: 77, repo: 'dotfiles', title: 'nvim: lazy-load lsp on filetype', branch: 'alex/lazy-lsp', checks: 'running', review: 'awaiting review', additions: 58, deletions: 41, updatedHoursAgo: 26, isDraft: true },
 ]
 
-const weather = {
-  location: 'Seattle, WA',
-  temp: 68,
-  feelsLike: 66,
-  condition: 'Partly cloudy',
-  high: 74,
-  low: 55,
-  windMph: 7,
+const fallbackWeather = {
+  location: 'Current location',
+  temp: 20,
+  feelsLike: 19,
+  condition: 'Locating weather',
+  high: 23,
+  low: 13,
+  windKmh: 11,
   humidity: 48,
   hourly: [
     { hour: '15', temp: 70 },
@@ -76,14 +76,115 @@ function relativeAgo(hours) {
   return `${Math.round(hours / 24)}d ago`
 }
 
+function weatherDescription(code) {
+  if (code === 0) return 'Clear sky'
+  if ([1, 2].includes(code)) return 'Partly cloudy'
+  if (code === 3) return 'Overcast'
+  if ([45, 48].includes(code)) return 'Foggy'
+  if ([51, 53, 55, 56, 57].includes(code)) return 'Drizzle'
+  if ([61, 63, 65, 66, 67].includes(code)) return 'Rain'
+  if ([71, 73, 75, 77].includes(code)) return 'Snow'
+  if ([80, 81, 82].includes(code)) return 'Rain showers'
+  if ([85, 86].includes(code)) return 'Snow showers'
+  if ([95, 96, 99].includes(code)) return 'Thunderstorms'
+  return 'Current conditions'
+}
+
+async function loadWeather(latitude, longitude, signal) {
+  const params = new URLSearchParams({
+    latitude: String(latitude),
+    longitude: String(longitude),
+    current: 'temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m',
+    hourly: 'temperature_2m,precipitation_probability',
+    daily: 'temperature_2m_max,temperature_2m_min',
+    temperature_unit: 'celsius',
+    wind_speed_unit: 'kmh',
+    timezone: 'auto',
+    forecast_days: '1',
+  })
+  const response = await fetch(`https://api.open-meteo.com/v1/forecast?${params}`, { signal })
+  if (!response.ok) throw new Error('Weather request failed')
+  const data = await response.json()
+  const currentHour = data.hourly.time.findIndex((time) => time >= data.current.time)
+  const start = currentHour < 0 ? 0 : currentHour
+  const hourly = data.hourly.time.slice(start, start + 6).map((time, index) => ({
+    hour: time.slice(11, 13),
+    temp: Math.round(data.hourly.temperature_2m[start + index]),
+  }))
+
+  let location = 'Current location'
+  try {
+    const reverseParams = new URLSearchParams({ format: 'jsonv2', lat: String(latitude), lon: String(longitude), zoom: '10', addressdetails: '1' })
+    const reverseResponse = await fetch(`https://nominatim.openstreetmap.org/reverse?${reverseParams}`, { signal })
+    if (reverseResponse.ok) {
+      const reverseData = await reverseResponse.json()
+      const address = reverseData.address || {}
+      const city = address.city || address.town || address.village || address.municipality
+      const region = address.state_code || address.state
+      if (city) location = region ? `${city}, ${region}` : city
+    }
+  } catch {
+    // Weather still works if the optional city lookup is unavailable.
+  }
+
+  return {
+    location,
+    temp: Math.round(data.current.temperature_2m),
+    feelsLike: Math.round(data.current.apparent_temperature),
+    condition: weatherDescription(data.current.weather_code),
+    high: Math.round(data.daily.temperature_2m_max[0]),
+    low: Math.round(data.daily.temperature_2m_min[0]),
+    windKmh: Math.round(data.current.wind_speed_10m),
+    humidity: Math.round(data.current.relative_humidity_2m),
+    hourly: hourly.length ? hourly : fallbackWeather.hourly,
+  }
+}
+
 function App() {
   const [now, setNow] = useState(() => new Date())
   const [tasks, setTasks] = useState(seedTasks)
   const [showCompleted, setShowCompleted] = useState(true)
+  const [weather, setWeather] = useState(fallbackWeather)
+  const [weatherStatus, setWeatherStatus] = useState('locating')
 
   useEffect(() => {
     const interval = window.setInterval(() => setNow(new Date()), 1000)
     return () => window.clearInterval(interval)
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    const controller = new AbortController()
+
+    if (!navigator.geolocation) {
+      setWeatherStatus('unavailable')
+      return () => controller.abort()
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      async ({ coords }) => {
+        if (cancelled) return
+        setWeatherStatus('updating')
+        try {
+          const currentWeather = await loadWeather(coords.latitude, coords.longitude, controller.signal)
+          if (!cancelled) {
+            setWeather(currentWeather)
+            setWeatherStatus('live')
+          }
+        } catch {
+          if (!cancelled) setWeatherStatus('offline')
+        }
+      },
+      () => {
+        if (!cancelled) setWeatherStatus('permission needed')
+      },
+      { enableHighAccuracy: false, maximumAge: 15 * 60 * 1000, timeout: 10000 },
+    )
+
+    return () => {
+      cancelled = true
+      controller.abort()
+    }
   }, [])
 
   const toggleTask = useCallback((id) => {
@@ -99,7 +200,7 @@ function App() {
   return (
     <div className="terminal-app">
       <div className="dashboard-frame">
-        <DashboardHeader name="Alex" now={now} tasksLeft={tasksLeft} />
+        <DashboardHeader name="Alex" now={now} tasksLeft={tasksLeft} weather={weather} weatherStatus={weatherStatus} />
 
         <main className="dashboard-grid">
           <FocusTasks
@@ -112,7 +213,7 @@ function App() {
           />
 
           <div className="side-stack">
-            <WeatherPanel index={1} />
+            <WeatherPanel index={1} weather={weather} weatherStatus={weatherStatus} />
             <AssignmentsPanel now={now} index={2} />
           </div>
 
@@ -131,7 +232,7 @@ function App() {
   )
 }
 
-function DashboardHeader({ name, now, tasksLeft }) {
+function DashboardHeader({ name, now, tasksLeft, weather, weatherStatus }) {
   return (
     <header className="dashboard-header">
       <div className="header-copy">
@@ -141,7 +242,7 @@ function DashboardHeader({ name, now, tasksLeft }) {
       </div>
       <div className="weather-summary">
         <span className="weather-glyph" aria-hidden="true">☼</span>
-        <div><strong>{weather.temp}°F <span>/ {weather.condition.toLowerCase()}</span></strong><small>{weather.location}</small></div>
+        <div><strong>{weather.temp}°C <span>/ {weather.condition.toLowerCase()}</span></strong><small>{weatherStatus === 'live' ? weather.location : `location ${weatherStatus}`}</small></div>
       </div>
     </header>
   )
@@ -188,14 +289,14 @@ function FocusTasks({ tasks, onToggle, onAdd, showCompleted, onToggleCompleted, 
   )
 }
 
-function WeatherPanel({ index }) {
+function WeatherPanel({ index, weather, weatherStatus }) {
   const temps = weather.hourly.map((entry) => entry.temp)
   const min = Math.min(...temps)
   const max = Math.max(...temps)
   const span = Math.max(max - min, 1)
 
-  return <Panel path="~/weather.now" index={index} className="weather-panel" meta={weather.location}>
-    <div className="weather-details"><div><strong className="large-temp">{weather.temp}°</strong><p>feels {weather.feelsLike}° · {weather.condition.toLowerCase()}</p></div><dl><div><dt>↕</dt><dd><b>{weather.high}°</b> / {weather.low}°</dd></div><div><dt>⌁</dt><dd>{weather.windMph} mph</dd></div><div><dt>♢</dt><dd>{weather.humidity}%</dd></div></dl></div>
+  return <Panel path="~/weather.now" index={index} className="weather-panel" meta={<span>{weather.location} · {weatherStatus}</span>}>
+    <div className="weather-details"><div><strong className="large-temp">{weather.temp}°C</strong><p>feels {weather.feelsLike}° · {weather.condition.toLowerCase()}</p></div><dl><div><dt>↕</dt><dd><b>{weather.high}°</b> / {weather.low}°</dd></div><div><dt>⌁</dt><dd>{weather.windKmh} km/h</dd></div><div><dt>♢</dt><dd>{weather.humidity}%</dd></div></dl></div>
     <div className="forecast"><div className="forecast-bars">{weather.hourly.map((entry) => <div className="forecast-hour" key={entry.hour}><span>{entry.temp}</span><i style={{ height: `${12 + ((entry.temp - min) / span) * 30}px` }} /><small>{entry.hour}</small></div>)}</div></div>
   </Panel>
 }

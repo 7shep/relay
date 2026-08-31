@@ -1,4 +1,4 @@
-import { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 
@@ -449,89 +449,160 @@ function TaskModal({ task, onClose, onToggle, onSave }) {
   </div>
 }
 
+const suggestedPrompts = [
+  'Plan my afternoon around what’s due',
+  'Which PR should I unblock first?',
+  'Summarize my week',
+]
+
+const assistantReply = {
+  thinking: 'Checked task due dates, current time, and recent PR metadata.',
+  answer: `Here's how I'd sequence the rest of your day.
+
+**Suggested blocks**
+
+1. **14:45 – 16:15 – CS-441 write-up.** Hard deadline in 6h and worth 15% of the grade.
+   Nothing else in the board is time-boxed this tightly.
+2. **16:15 – 16:45 – Review Priya's scheduler PR.** Short, and it's currently blocking someone else. CI is red on it, so flag the failing job in your review rather than leaving every line.
+3. **16:45 – 18:45 – Ship refresh-token rotation.** \`orbit-api#1842\` is already approved with green checks, so this is merge-and-monitor rather than new work.
+
+**What I'd drop**
+
+- The flaky snapshot tests are already checked off, so ignore them.
+- \`dotfiles#77\` is a draft with no reviewer waiting – leave it for the weekend.
+
+> Rain probability climbs to 35% around 19:00, so if you run planning to walk, go before 18:00.
+
+Want me to rewrite your focus list in this order?`,
+}
+
+function tokenize(text) {
+  return text.split(/(\s+)/).filter(Boolean)
+}
+
+function renderInline(text, keyPrefix) {
+  return text.split(/(\*\*.*?\*\*|`.*?`)/g).map((part, index) => {
+    const key = `${keyPrefix}-${index}`
+    if (part.startsWith('**') && part.endsWith('**')) return <strong key={key}>{part.slice(2, -2)}</strong>
+    if (part.startsWith('`') && part.endsWith('`')) return <code key={key}>{part.slice(1, -1)}</code>
+    return <React.Fragment key={key}>{part}</React.Fragment>
+  })
+}
+
+function AssistantMarkdown({ text }) {
+  return <div className="assistant-markdown">{text.split('\n').map((line, index) => {
+    const key = `line-${index}`
+    if (!line) return <span className="assistant-break" key={key} aria-hidden="true" />
+    if (line.startsWith('> ')) return <blockquote key={key}>{renderInline(line.slice(2), key)}</blockquote>
+    if (/^\d+\. /.test(line)) {
+      const [, number, content] = line.match(/^(\d+)\. (.*)$/)
+      return <div className="assistant-list-item" key={key}><span>{number}.</span><p>{renderInline(content, key)}</p></div>
+    }
+    if (line.startsWith('- ')) return <div className="assistant-list-item assistant-bullet" key={key}><span>–</span><p>{renderInline(line.slice(2), key)}</p></div>
+    if (line.startsWith('**') && line.endsWith('**')) return <p className="assistant-heading" key={key}>{renderInline(line, key)}</p>
+    return <p key={key}>{renderInline(line, key)}</p>
+  })}</div>
+}
+
 function ChatBar() {
   const [isOpen, setIsOpen] = useState(true)
   const [draft, setDraft] = useState('')
-  const [files, setFiles] = useState([])
   const [messages, setMessages] = useState([])
-  const [isSending, setIsSending] = useState(false)
-  const [error, setError] = useState('')
-  const fileInputRef = useRef(null)
+  const [isStreaming, setIsStreaming] = useState(false)
+  const [thinkingOpen, setThinkingOpen] = useState(false)
+  const scrollRef = useRef(null)
+  const timers = useRef([])
 
-  function addFiles(event) {
-    const incoming = [...event.target.files]
-    setFiles((current) => {
-      const existing = new Set(current.map((file) => `${file.name}-${file.lastModified}`))
-      return [...current, ...incoming.filter((file) => !existing.has(`${file.name}-${file.lastModified}`))]
-    })
-    event.target.value = ''
+  useEffect(() => () => timers.current.forEach((timer) => window.clearInterval(timer)), [])
+
+  useEffect(() => {
+    if (isOpen && scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+  }, [messages, isOpen])
+
+  function reset() {
+    timers.current.forEach((timer) => window.clearInterval(timer))
+    timers.current = []
+    setMessages([])
+    setIsStreaming(false)
+    setThinkingOpen(false)
   }
 
-  function removeFile(fileToRemove) {
-    setFiles((current) => current.filter((file) => file !== fileToRemove))
-  }
-
-  async function submit(event) {
-    event.preventDefault()
-    const prompt = draft.trim()
-    if ((!prompt && !files.length) || isSending) return
-    const attachedFiles = [...files]
-    const fileNames = attachedFiles.map((file) => file.name)
-    const userMessage = { role: 'user', content: prompt || 'Please look at these files.', files: fileNames }
-    const nextMessages = [...messages, userMessage]
-    setMessages(nextMessages)
+  function send(value) {
+    const prompt = value.trim()
+    if (!prompt || isStreaming) return
+    const assistantId = Date.now()
+    setMessages((current) => [...current, { role: 'user', content: prompt }, { id: assistantId, role: 'assistant', content: '', thinking: '', phase: 'thinking' }])
     setDraft('')
-    setFiles([])
-    setError('')
-    setIsSending(true)
+    setThinkingOpen(true)
+    setIsStreaming(true)
 
-    try {
-      const fileContext = await Promise.all(attachedFiles.map(async (file) => {
-        if (file.type.startsWith('text/') || /\.(md|txt|csv|json)$/i.test(file.name)) {
-          if (file.size <= 200000) return `\n\n--- ${file.name} ---\n${await file.text()}`
-          return `\n\n--- ${file.name} ---\n[text file is larger than 200 KB; read it locally instead]`
-        }
-        return `\n\n--- ${file.name} ---\n[attached file; PDF and document text extraction will be connected next]`
-      }))
-      const modelResponse = await fetch('http://localhost:11434/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'qwen2.5:7b',
-          stream: false,
-          messages: [
-            { role: 'system', content: 'You are Start, a concise local desktop assistant. Give practical answers. Do not claim to have read an attached PDF or document when only its filename is available.' },
-            ...nextMessages.map((message, index) => ({ role: message.role, content: `${message.content}${message.files?.length ? `\nAttached files: ${message.files.join(', ')}` : ''}${index === nextMessages.length - 1 ? fileContext.join('') : ''}` })),
-          ],
-        }),
-      })
-      if (!modelResponse.ok) throw new Error('Ollama returned an error')
-      const data = await modelResponse.json()
-      setMessages((current) => [...current, { role: 'assistant', content: data.message?.content || 'Qwen returned an empty response.' }])
-    } catch (requestError) {
-      setError(requestError.message === 'Ollama returned an error' ? 'Ollama could not answer. Check that qwen2.5:7b is running.' : 'Could not reach Ollama at localhost:11434.')
-    } finally {
-      setIsSending(false)
-    }
+    const thinkingTokens = tokenize(assistantReply.thinking)
+    const answerTokens = tokenize(assistantReply.answer)
+    let cursor = 0
+    const thinkTimer = window.setInterval(() => {
+      cursor += 2
+      setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, thinking: thinkingTokens.slice(0, cursor).join('') } : message))
+      if (cursor >= thinkingTokens.length) {
+        window.clearInterval(thinkTimer)
+        setThinkingOpen(false)
+        setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, phase: 'answering', thoughtSeconds: 1, thinking: assistantReply.thinking } : message))
+        let answerCursor = 0
+        const answerTimer = window.setInterval(() => {
+          answerCursor += 2
+          setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content: answerTokens.slice(0, answerCursor).join('') } : message))
+          if (answerCursor >= answerTokens.length) {
+            window.clearInterval(answerTimer)
+            setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, phase: 'done' } : message))
+            setIsStreaming(false)
+          }
+        }, 18)
+        timers.current.push(answerTimer)
+      }
+    }, 16)
+    timers.current.push(thinkTimer)
   }
 
-  return <aside className={`assistant-dock ${isOpen ? 'is-open' : ''}`} aria-label="Local Qwen assistant">
-    <header className="assistant-header"><button className="assistant-title" onClick={() => setIsOpen((current) => !current)} aria-expanded={isOpen}><span className="assistant-prompt">$ qwen --local</span><strong>Ask Start</strong><span className="assistant-model">qwen2.5:7b</span></button><button className="assistant-collapse" onClick={() => setIsOpen((current) => !current)} aria-label={isOpen ? 'Collapse assistant' : 'Expand assistant'}>{isOpen ? '−' : '+'}</button></header>
-    {isOpen && <div className="assistant-content">
-      <div className="assistant-messages" aria-live="polite" aria-busy={isSending}>
-        {!messages.length && <div className="assistant-empty"><span className="accent-text">✦</span><p>Ask about your day, describe a task, or attach files for Qwen to work with.</p></div>}
-        {messages.map((message, index) => <div className={`assistant-message ${message.role}`} key={`${message.role}-${index}`}><span className="message-prefix">{message.role === 'user' ? '&gt;' : '·'}</span><div><p>{message.content}</p>{message.files?.length ? <div className="message-files">{message.files.map((name) => <span key={name}>↳ {name}</span>)}</div> : null}</div></div>)}
-        {isSending && <div className="assistant-message assistant"><span className="message-prefix">·</span><p className="assistant-thinking">Qwen is thinking...</p></div>}
-        {error && <div className="assistant-error" role="alert">{error}</div>}
+  function stop() {
+    timers.current.forEach((timer) => window.clearInterval(timer))
+    timers.current = []
+    setIsStreaming(false)
+    setThinkingOpen(false)
+    setMessages((current) => current.map((message) => message.phase ? { ...message, phase: 'done' } : message))
+  }
+
+  function submit(event) {
+    event.preventDefault()
+    send(draft)
+  }
+
+  return <aside className={`assistant-dock ${isOpen ? 'is-open' : 'is-collapsed'}`} aria-label="Assistant sidebar">
+    {isOpen ? <>
+      <header className="assistant-header">
+        <h2><span className="assistant-spark" aria-hidden="true">✣</span><span>~/assistant</span><span className="assistant-model">gpt-5-mini</span></h2>
+        <div className="assistant-actions">
+          <button type="button" className="assistant-icon-button" onClick={reset} aria-label="New conversation" title="New conversation">↻</button>
+          <button type="button" className="assistant-icon-button" onClick={() => setIsOpen(false)} aria-label="Collapse assistant" title="Collapse assistant">⇥</button>
+        </div>
+      </header>
+      <div ref={scrollRef} className="assistant-messages" aria-live="polite" aria-busy={isStreaming}>
+        {!messages.length ? <div className="assistant-empty-state">
+          <p><span className="accent-text">assistant</span> connected to this dashboard.</p>
+          <p>It can see your focus list, assignment queue, open pull requests, and today’s forecast. Ask it to triage, plan, or explain anything on screen.</p>
+          <div className="assistant-prompts">{suggestedPrompts.map((prompt) => <button key={prompt} type="button" onClick={() => send(prompt)}><span aria-hidden="true">&gt;</span>{prompt}</button>)}</div>
+        </div> : messages.map((message, index) => message.role === 'user' ? <div className="assistant-user-message" key={`${message.role}-${index}`}>{message.content}</div> : <div className="assistant-response" key={message.id}>
+          <button type="button" className="assistant-thinking-toggle" onClick={() => setThinkingOpen((value) => !value)} aria-expanded={thinkingOpen}><span aria-hidden="true">›</span>{message.phase === 'thinking' ? 'Thinking…' : `Thought for ${message.thoughtSeconds || 1}s`}</button>
+          {thinkingOpen && message.thinking ? <p className="assistant-thinking-copy">{message.thinking}</p> : null}
+          {message.content ? <AssistantMarkdown text={message.content} /> : null}
+        </div>)}
       </div>
-      {!!files.length && <div className="attachment-list" aria-label="Attached files">{files.map((file) => <span className="attachment-chip" key={`${file.name}-${file.lastModified}`}><span>{file.name}</span><button type="button" onClick={() => removeFile(file)} aria-label={`Remove ${file.name}`}>×</button></span>)}</div>}
       <form className="assistant-form" onSubmit={submit}>
-        <button type="button" className="attach-button" onClick={() => fileInputRef.current?.click()} aria-label="Attach files">↥</button>
-        <input ref={fileInputRef} className="visually-hidden-file-input" type="file" multiple accept=".pdf,.txt,.md,.csv,.json,.doc,.docx" onChange={addFiles} />
-        <input value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="ask something..." aria-label="Message Qwen" />
-        <button type="submit" className="assistant-send" disabled={isSending || (!draft.trim() && !files.length)} aria-label="Send message">↵</button>
+        <span className="assistant-prompt-mark" aria-hidden="true">&gt;</span>
+        <label className="visually-hidden" htmlFor="assistant-input">Ask the assistant</label>
+        <input id="assistant-input" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="ask about your day..." />
+        {isStreaming ? <button type="button" className="assistant-send" onClick={stop} aria-label="Stop generating">■</button> : <button type="submit" className="assistant-send" disabled={!draft.trim()} aria-label="Send message">↥</button>}
       </form>
-    </div>}
+      <p className="assistant-hint">enter to send · shift+enter for newline · reads your focus list, courses, repos &amp; forecast</p>
+    </> : <button type="button" className="assistant-collapsed" onClick={() => setIsOpen(true)} aria-label="Open assistant" aria-expanded="false"><span aria-hidden="true">⇥</span><span>assistant</span>{isStreaming ? <i aria-hidden="true" /> : null}</button>}
   </aside>
 }
 

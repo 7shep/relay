@@ -64,6 +64,9 @@ h1 { display: flex; align-items: baseline; margin-top: 7px; color: var(--term-te
 .panel-meta { flex: 0 0 auto; color: var(--term-muted); white-space: nowrap; }
 .panel-meta-button { padding: 0; border: 0; color: var(--term-muted); background: transparent; font: inherit; }
 .panel-meta-button:hover { color: var(--term-accent); }
+.focus-meta { display: inline-flex; align-items: center; gap: 1px; }
+.focus-sync-status.planning { color: var(--term-warn); }
+.focus-sync-status.offline { color: var(--term-danger); }
 .panel-body { min-height: 0; }
 
 .progress-row { display: flex; align-items: center; gap: 12px; padding: 10px; border-bottom: 1px solid var(--term-border); color: var(--term-muted); }

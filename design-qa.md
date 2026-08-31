@@ -39,3 +39,10 @@ final result: passed
 ## Follow-up polish
 
 - P3 only: replace the small terminal glyph controls with the project’s preferred icon package if one is added to the runtime later.
+
+## Follow-up functional verification
+
+- Seeded persisted state from `2026-08-30` and loaded it on `2026-08-31`.
+- Confirmed incomplete tasks carry forward, completed tasks are removed, and the stored day advances.
+- Mocked the local `qwen2.5:7b` endpoint and confirmed the prompt includes the assignment queue, returns a draft task, and appends it to the focus list.
+- Confirmed the persisted rollover result contains two incomplete tasks and zero completed tasks, with no browser runtime errors.

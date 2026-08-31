@@ -1,0 +1,102 @@
+﻿@media (max-width: 850px) {
+  .terminal-app {
+    display: block;
+  }
+  .dashboard-frame {
+    padding: 25px 20px;
+  }
+  .dashboard-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 18px;
+  }
+  .weather-summary {
+    align-self: flex-end;
+  }
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+  .focus-panel,
+  .side-stack,
+  .pulls-panel {
+    grid-column: auto;
+  }
+  .side-stack {
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: auto;
+  }
+  .assistant-dock {
+    position: static;
+    height: auto;
+    min-height: 0;
+    margin-top: 18px;
+    border-top: 1px solid var(--term-border);
+    border-left: 0;
+  }
+  .assistant-dock.is-open {
+    border-top-color: var(--term-accent-line);
+  }
+  .assistant-messages {
+    flex: none;
+    max-height: 245px;
+  }
+}
+
+@media (max-width: 560px) {
+  .dashboard-frame {
+    padding: 20px 12px;
+  }
+  h1 {
+    font-size: 26px;
+  }
+  .caret {
+    width: 7px;
+    height: 21px;
+  }
+  .side-stack {
+    grid-template-columns: 1fr;
+  }
+  .focus-list {
+    min-height: auto;
+  }
+  .panel-header {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+  .system-footer {
+    line-height: 1.8;
+  }
+  .github-fields {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+  .github-connect {
+    justify-self: start;
+  }
+  .github-pr-row {
+    grid-template-columns: minmax(0, 1fr) 18px;
+  }
+  .github-pr-link {
+    grid-template-columns: 15px minmax(0, 1fr) 14px;
+  }
+  .github-pr-updated {
+    display: none;
+  }
+  .modal-backdrop {
+    padding: 12px;
+  }
+  .task-detail,
+  .task-edit-form {
+    padding: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

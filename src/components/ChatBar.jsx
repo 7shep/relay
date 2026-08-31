@@ -145,7 +145,7 @@ export default function ChatBar({ tasks, assignments, onCreateTasks }) {
         <input id="assistant-input" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="ask about your day..." />
         {isStreaming ? <button type="button" className="assistant-send" onClick={stop} aria-label="Stop generating"><Icon name="stop" size={11} /></button> : <button type="submit" className="assistant-send" disabled={!draft.trim()} aria-label="Send message"><Icon name="send" size={12} /></button>}
       </form>
-      <p className="assistant-hint">enter to send Â· shift+enter for newline Â· reads your focus list, courses, repos &amp; forecast</p>
+      <p className="assistant-hint">enter to send &#8226; shift+enter for newline &#8226; reads your focus list, courses, repos &amp; forecast</p>
     </> : <button type="button" className="assistant-collapsed" onClick={() => setIsOpen(true)} aria-label="Open assistant" aria-expanded="false"><Icon name="chevronRight" size={14} /><span>assistant</span>{isStreaming ? <i aria-hidden="true" /> : null}</button>}
   </aside>
 }

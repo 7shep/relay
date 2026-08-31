@@ -196,9 +196,9 @@ function App() {
 
         <footer className="system-footer">
           <span>synced 2m ago</span>
-          <span aria-hidden="true">Â·</span>
+          <span aria-hidden="true">&#8226;</span>
           <span>3 sources connected</span>
-          <span aria-hidden="true">Â·</span>
+          <span aria-hidden="true">&#8226;</span>
           <span className="accent-text">all systems nominal</span>
         </footer>
       </div>

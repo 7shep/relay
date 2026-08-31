@@ -1,13 +1,13 @@
-import { StrictMode, useCallback, useEffect, useMemo, useState } from 'react'
+import { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 
 const seedTasks = [
-  { id: 't1', label: 'Ship auth refresh-token rotation', project: 'orbit-api', estimate: '2h', done: false },
-  { id: 't2', label: 'Review Priya’s scheduler PR', project: 'orbit-api', estimate: '30m', done: false },
-  { id: 't3', label: 'Draft CS-441 project proposal', project: 'school', estimate: '45m', done: false },
-  { id: 't4', label: 'Fix flaky snapshot tests on CI', project: 'dashboard', estimate: '1h', done: true },
-  { id: 't5', label: 'Morning inbox + standup notes', project: 'admin', estimate: '20m', done: true },
+  { id: 't1', label: 'Ship auth refresh-token rotation', project: 'orbit-api', estimate: '2h', due: '2026-09-02', description: 'Rotate refresh tokens on every exchange and keep the existing session invalidation path intact.', timeline: ['Review the current token exchange flow', 'Implement rotation and persistence', 'Add coverage for reuse and expiry', 'Open the PR and request review'], done: false },
+  { id: 't2', label: 'Review Priya’s scheduler PR', project: 'orbit-api', estimate: '30m', due: '2026-09-01', description: 'Check the retry budget behavior and make sure failed jobs cannot create an unbounded retry loop.', timeline: ['Read the diff and existing scheduler tests', 'Run the retry-related test suite', 'Leave review notes or approve'], done: false },
+  { id: 't3', label: 'Draft CS-441 project proposal', project: 'school', estimate: '45m', due: '2026-09-03', description: 'Turn the project idea into a one-page proposal with the problem, approach, and a realistic scope.', timeline: ['Write a rough problem statement', 'Choose the smallest useful scope', 'Add milestones and proofread'], done: false },
+  { id: 't4', label: 'Fix flaky snapshot tests on CI', project: 'dashboard', estimate: '1h', due: '2026-09-04', description: 'Find the source of the intermittent snapshot mismatch and make the test deterministic in CI.', timeline: ['Reproduce the failure locally', 'Trace the source of the unstable output', 'Update the fixture and rerun CI'], done: true },
+  { id: 't5', label: 'Morning inbox + standup notes', project: 'admin', estimate: '20m', due: '2026-08-31', description: 'Clear the highest-signal messages and capture anything that should become a task later.', timeline: ['Scan unread messages', 'Capture follow-ups', 'Write the standup update'], done: true },
 ]
 
 const assignments = [
@@ -16,13 +16,6 @@ const assignments = [
   { id: 'a3', course: 'CS-330', title: 'Lab 4: cache simulator', kind: 'lab', dueInHours: 54, weight: '10%' },
   { id: 'a4', course: 'PHIL-210', title: 'Reading response - Nagel', kind: 'reading', dueInHours: 96, weight: '5%' },
   { id: 'a5', course: 'MATH-312', title: 'Midterm exam', kind: 'exam', dueInHours: 168, weight: '30%' },
-]
-
-const pullRequests = [
-  { id: 'p1', number: 1842, repo: 'orbit-api', title: 'Rotate refresh tokens on every exchange', branch: 'alex/token-rotation', checks: 'passing', review: 'approved', additions: 412, deletions: 96, updatedHoursAgo: 1, isDraft: false },
-  { id: 'p2', number: 1839, repo: 'orbit-api', title: 'Backfill job scheduler with retry budget', branch: 'priya/scheduler-retries', checks: 'failing', review: 'awaiting review', additions: 738, deletions: 210, updatedHoursAgo: 3, isDraft: false },
-  { id: 'p3', number: 218, repo: 'terminal-dash', title: 'Extract panel chrome into shared primitive', branch: 'alex/panel-primitive', checks: 'passing', review: 'changes requested', additions: 164, deletions: 302, updatedHoursAgo: 9, isDraft: false },
-  { id: 'p4', number: 77, repo: 'dotfiles', title: 'nvim: lazy-load lsp on filetype', branch: 'alex/lazy-lsp', checks: 'running', review: 'awaiting review', additions: 58, deletions: 41, updatedHoursAgo: 26, isDraft: true },
 ]
 
 const fallbackWeather = {
@@ -74,6 +67,78 @@ function relativeAgo(hours) {
   if (hours < 1) return 'just now'
   if (hours < 24) return `${hours}h ago`
   return `${Math.round(hours / 24)}d ago`
+}
+
+function relativeUpdated(timestamp) {
+  const hours = Math.max(0, Math.round((Date.now() - new Date(timestamp).getTime()) / 3600000))
+  return relativeAgo(hours)
+}
+
+function formatTaskDue(value) {
+  if (!value) return 'No due date set'
+  return new Intl.DateTimeFormat('en-CA', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(`${value}T12:00:00`))
+}
+
+function readGitHubConfig() {
+  try {
+    return JSON.parse(window.localStorage.getItem('start.github.config')) || { username: '', token: '' }
+  } catch {
+    return { username: '', token: '' }
+  }
+}
+
+async function githubJson(url, token, signal) {
+  const headers = { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' }
+  if (token) headers.Authorization = `Bearer ${token}`
+  const response = await fetch(url, { headers, signal })
+  if (response.ok) return response.json()
+  if (response.status === 401) throw new Error('GitHub rejected the token. Check it and try again.')
+  if (response.status === 403) throw new Error('GitHub rate limit reached. Add a token or try again later.')
+  if (response.status === 404) throw new Error('GitHub could not access one of these repositories. Check the token permissions.')
+  throw new Error(`GitHub returned ${response.status}.`)
+}
+
+async function githubPages(url, token, signal) {
+  const results = []
+  for (let page = 1; page <= 10; page += 1) {
+    const joiner = url.includes('?') ? '&' : '?'
+    const pageItems = await githubJson(`${url}${joiner}per_page=100&page=${page}`, token, signal)
+    if (!Array.isArray(pageItems)) return results
+    results.push(...pageItems)
+    if (pageItems.length < 100) break
+  }
+  return results
+}
+
+function normalizePullRequest(item, username, fallbackRepo = '') {
+  const repo = fallbackRepo || item.repository_url?.replace('https://api.github.com/repos/', '') || item.base?.repo?.full_name || 'unknown/repository'
+  return {
+    id: `${repo}#${item.number}`,
+    number: item.number,
+    repo,
+    title: item.title,
+    author: item.user?.login || 'unknown',
+    branch: item.head?.ref || '',
+    url: item.html_url,
+    updatedAt: item.updated_at,
+    draft: Boolean(item.draft),
+    isMine: item.user?.login?.toLowerCase() === username.toLowerCase(),
+  }
+}
+
+async function loadGitHubPullRequests(username, token, signal) {
+  const query = encodeURIComponent(`is:pr is:open author:${username}`)
+  const authoredItems = await githubPages(`https://api.github.com/search/issues?q=${query}&sort=updated&order=desc`, token, signal)
+  const mine = authoredItems.map((item) => normalizePullRequest(item, username))
+  const repoNames = [...new Set(mine.map((item) => item.repo))]
+  const repositories = []
+
+  for (const repo of repoNames) {
+    const repoItems = await githubPages(`https://api.github.com/repos/${repo}/pulls?state=open&sort=updated&direction=desc`, token, signal)
+    repositories.push({ name: repo, pullRequests: repoItems.map((item) => normalizePullRequest(item, username, repo)) })
+  }
+
+  return { mine, repositories }
 }
 
 function weatherDescription(code) {
@@ -144,6 +209,7 @@ function App() {
   const [now, setNow] = useState(() => new Date())
   const [tasks, setTasks] = useState(seedTasks)
   const [showCompleted, setShowCompleted] = useState(true)
+  const [selectedTask, setSelectedTask] = useState(null)
   const [weather, setWeather] = useState(fallbackWeather)
   const [weatherStatus, setWeatherStatus] = useState('locating')
 
@@ -151,6 +217,20 @@ function App() {
     const interval = window.setInterval(() => setNow(new Date()), 1000)
     return () => window.clearInterval(interval)
   }, [])
+
+  useEffect(() => {
+    if (!selectedTask) return undefined
+    const previousOverflow = document.body.style.overflow
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') setSelectedTask(null)
+    }
+    document.body.style.overflow = 'hidden'
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [selectedTask])
 
   useEffect(() => {
     let cancelled = false
@@ -189,10 +269,18 @@ function App() {
 
   const toggleTask = useCallback((id) => {
     setTasks((current) => current.map((task) => (task.id === id ? { ...task, done: !task.done } : task)))
+    setSelectedTask((current) => current && current.id === id ? { ...current, done: !current.done } : current)
   }, [])
 
   const addTask = useCallback((label) => {
-    setTasks((current) => [...current, { id: `t${Date.now()}`, label, project: 'inbox', estimate: '30m', done: false }])
+    const nextTask = { id: `t${Date.now()}`, label, project: 'inbox', estimate: '30m', due: '', description: 'Captured from the focus input. Add more context so the next step is obvious.', timeline: ['Define the first concrete step', 'Make a small block of progress', 'Review and decide what comes next'], done: false }
+    setTasks((current) => [...current, nextTask])
+    setSelectedTask(nextTask)
+  }, [])
+
+  const updateTask = useCallback((id, updates) => {
+    setTasks((current) => current.map((task) => (task.id === id ? { ...task, ...updates } : task)))
+    setSelectedTask((current) => current && current.id === id ? { ...current, ...updates } : current)
   }, [])
 
   const tasksLeft = useMemo(() => tasks.filter((task) => !task.done).length, [tasks])
@@ -205,8 +293,8 @@ function App() {
         <main className="dashboard-grid">
           <FocusTasks
             tasks={tasks}
-            onToggle={toggleTask}
             onAdd={addTask}
+            onOpen={setSelectedTask}
             showCompleted={showCompleted}
             onToggleCompleted={() => setShowCompleted((current) => !current)}
             index={0}
@@ -228,6 +316,7 @@ function App() {
           <span className="accent-text">all systems nominal</span>
         </footer>
       </div>
+      {selectedTask && <TaskModal task={selectedTask} onClose={() => setSelectedTask(null)} onToggle={toggleTask} onSave={updateTask} />}
     </div>
   )
 }
@@ -257,7 +346,7 @@ function Panel({ path, meta, children, primary = false, index = 0, className = '
   )
 }
 
-function FocusTasks({ tasks, onToggle, onAdd, showCompleted, onToggleCompleted, index }) {
+function FocusTasks({ tasks, onAdd, onOpen, showCompleted, onToggleCompleted, index }) {
   const completed = tasks.filter((task) => task.done).length
   const visible = showCompleted ? tasks : tasks.filter((task) => !task.done)
   const progress = tasks.length === 0 ? 0 : Math.round((completed / tasks.length) * 100)
@@ -277,9 +366,9 @@ function FocusTasks({ tasks, onToggle, onAdd, showCompleted, onToggleCompleted, 
       <ul className="focus-list">
         {visible.map((task, position) => {
           const isNext = !task.done && visible.find((item) => !item.done)?.id === task.id
-          return <li key={task.id}><button className={`focus-task ${isNext ? 'next-task' : ''} ${task.done ? 'completed-task' : ''}`} onClick={() => onToggle(task.id)} aria-pressed={task.done}>
+          return <li key={task.id}><button className={`focus-task ${isNext ? 'next-task' : ''} ${task.done ? 'completed-task' : ''}`} onClick={() => onOpen(task)} aria-haspopup="dialog">
             <span className="task-box" aria-hidden="true">{task.done ? '×' : ''}</span>
-            <span className="task-text"><strong>{task.label}</strong><small>{String(position + 1).padStart(2, '0')} · {task.project} · est {task.estimate}{isNext && <em> · up next</em>}</small></span>
+            <span className="task-text"><strong>{task.label}</strong><small>{String(position + 1).padStart(2, '0')} · {task.project} · est {task.estimate}{isNext && <em> · up next</em>}</small></span><span className="task-open" aria-hidden="true">↗</span>
           </button></li>
         })}
         {visible.length === 0 && <li className="empty-task">everything checked off.<small>Add something below or close the laptop.</small></li>}
@@ -287,6 +376,71 @@ function FocusTasks({ tasks, onToggle, onAdd, showCompleted, onToggleCompleted, 
       <form className="add-task-form" onSubmit={submit}><label htmlFor="new-task">&gt;</label><input id="new-task" name="task" placeholder="add a focus task..." autoComplete="off" /><button type="submit">+ add</button></form>
     </Panel>
   )
+}
+
+function TaskModal({ task, onClose, onToggle, onSave }) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState({ ...task, timelineText: task.timeline?.join('\n') || '' })
+  const closeRef = useRef(null)
+
+  useEffect(() => {
+    setDraft({ ...task, timelineText: task.timeline?.join('\n') || '' })
+    setEditing(false)
+  }, [task])
+
+  useEffect(() => {
+    closeRef.current?.focus()
+    const trapFocus = (event) => {
+      if (event.key !== 'Tab') return
+      const dialog = closeRef.current?.closest('[role="dialog"]')
+      if (!dialog) return
+      const focusable = [...dialog.querySelectorAll('button, input, textarea')].filter((element) => !element.disabled)
+      if (!focusable.length) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    document.addEventListener('keydown', trapFocus)
+    return () => document.removeEventListener('keydown', trapFocus)
+  }, [])
+
+  function updateDraft(field, value) {
+    setDraft((current) => ({ ...current, [field]: value }))
+  }
+
+  function save(event) {
+    event.preventDefault()
+    const timeline = draft.timelineText.split('\n').map((line) => line.trim()).filter(Boolean)
+    onSave(task.id, { label: draft.label.trim() || task.label, description: draft.description.trim(), estimate: draft.estimate.trim() || '30m', due: draft.due, timeline })
+    setEditing(false)
+  }
+
+  const timelineText = editing ? draft.timelineText : task.timeline.join('\n')
+  return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <section className="task-modal" role="dialog" aria-modal="true" aria-labelledby="task-modal-title" aria-describedby="task-modal-description">
+      <header className="task-modal-header"><span className="command-line">$ cat ~/focus/{task.id}.md</span><button ref={closeRef} className="modal-close" onClick={onClose} aria-label="Close task details">×</button></header>
+      {editing ? <form className="task-edit-form" onSubmit={save}>
+        <label><span>task</span><input value={draft.label} onChange={(event) => updateDraft('label', event.target.value)} autoFocus /></label>
+        <label><span>description</span><textarea value={draft.description} onChange={(event) => updateDraft('description', event.target.value)} rows="3" /></label>
+        <div className="task-edit-grid"><label><span>estimate</span><input value={draft.estimate} onChange={(event) => updateDraft('estimate', event.target.value)} /></label><label><span>due date</span><input type="date" value={draft.due} onChange={(event) => updateDraft('due', event.target.value)} /></label></div>
+        <label><span>timeline <small>one step per line</small></span><textarea value={timelineText} onChange={(event) => updateDraft('timelineText', event.target.value)} rows="5" /></label>
+        <div className="task-modal-actions"><button type="button" className="modal-secondary" onClick={() => setEditing(false)}>cancel</button><button type="submit" className="modal-primary">save changes</button></div>
+      </form> : <div className="task-detail">
+        <div className="task-detail-top"><span className="eyebrow">{task.project} · {task.done ? 'completed' : 'focus task'}</span><span className="task-detail-id">{task.id}</span></div>
+        <h2 id="task-modal-title">{task.label}</h2>
+        <p id="task-modal-description" className="task-description">{task.description || 'No description yet. Add context to make this task easier to pick back up.'}</p>
+        <div className="task-facts"><div><span>estimate</span><strong>{task.estimate}</strong></div><div><span>due</span><strong>{formatTaskDue(task.due)}</strong></div></div>
+        <div className="timeline-block"><span className="eyebrow">Suggested timeline</span><ol>{task.timeline?.length ? task.timeline.map((step, index) => <li key={`${step}-${index}`}><span>{String(index + 1).padStart(2, '0')}</span>{step}</li>) : <li className="timeline-empty">No timeline yet. Add one while editing.</li>}</ol></div>
+        <div className="task-modal-actions"><button className="modal-secondary" onClick={() => setEditing(true)}>edit task</button><button className={`modal-primary ${task.done ? 'reopen-button' : ''}`} onClick={() => onToggle(task.id)}>{task.done ? 'reopen task' : 'mark complete'}</button></div>
+      </div>}
+    </section>
+  </div>
 }
 
 function WeatherPanel({ index, weather, weatherStatus }) {
@@ -309,10 +463,63 @@ function AssignmentsPanel({ now, index }) {
 }
 
 function PullRequestsPanel({ index }) {
-  const needsAttention = pullRequests.filter((pr) => pr.checks === 'failing' || pr.review === 'changes requested').length
-  return <Panel path="~/git/pulls --author=@me" index={index} className="pulls-panel" meta={<span>{pullRequests.length} open <b className="warn-text">· {needsAttention} need attention</b></span>}>
-    <div className="pulls-scroll"><table><thead><tr><th>pull request</th><th>checks</th><th>review</th><th className="align-right">diff</th><th className="align-right">updated</th></tr></thead><tbody>{pullRequests.map((pr) => <tr key={pr.id}><td><div className="pr-title"><span className={pr.isDraft ? 'muted-text' : 'accent-text'} aria-hidden="true">♧</span><div><strong>{pr.title} {pr.isDraft && <small className="draft-label">draft</small>}</strong><small>{pr.repo} #{pr.number} · {pr.branch}</small></div></div></td><td><span className={`check-status ${pr.checks}`}>{pr.checks === 'passing' ? '✓' : pr.checks === 'failing' ? '×' : '◌'} {pr.checks === 'passing' ? 'checks passing' : pr.checks === 'failing' ? 'checks failing' : 'checks running'}</span></td><td className={pr.review === 'approved' ? 'accent-text' : pr.review === 'changes requested' ? 'warn-text' : 'muted-text'}>{pr.review}</td><td className="align-right"><span className="accent-text">+{pr.additions}</span> <span className="danger-text">-{pr.deletions}</span></td><td className="align-right muted-text">{relativeAgo(pr.updatedHoursAgo)}</td></tr>)}</tbody></table></div>
+  const [config, setConfig] = useState(readGitHubConfig)
+  const [draftUsername, setDraftUsername] = useState(config.username)
+  const [draftToken, setDraftToken] = useState(config.token)
+  const [state, setState] = useState({ status: config.username ? 'loading' : 'setup', data: null, error: '' })
+
+  useEffect(() => {
+    if (!config.username) return undefined
+    let cancelled = false
+    const controller = new AbortController()
+    setState({ status: 'loading', data: null, error: '' })
+    loadGitHubPullRequests(config.username, config.token, controller.signal)
+      .then((data) => { if (!cancelled) setState({ status: 'ready', data, error: '' }) })
+      .catch((error) => { if (!cancelled && error.name !== 'AbortError') setState({ status: 'error', data: null, error: error.message }) })
+    return () => { cancelled = true; controller.abort() }
+  }, [config])
+
+  function connect(event) {
+    event.preventDefault()
+    const username = draftUsername.trim()
+    if (!username) return
+    const next = { username, token: draftToken.trim() }
+    window.localStorage.setItem('start.github.config', JSON.stringify(next))
+    setConfig(next)
+  }
+
+  function disconnect() {
+    window.localStorage.removeItem('start.github.config')
+    setConfig({ username: '', token: '' })
+    setDraftUsername('')
+    setDraftToken('')
+    setState({ status: 'setup', data: null, error: '' })
+  }
+
+  const meta = state.status === 'ready' ? <span>{state.data.mine.length} mine · {state.data.repositories.length} repos</span> : state.status === 'loading' ? <span>syncing...</span> : null
+  return <Panel path="~/git/pulls --author=@me" index={index} className="pulls-panel" meta={meta}>
+    {!config.username ? <GitHubSetup username={draftUsername} token={draftToken} onUsernameChange={setDraftUsername} onTokenChange={setDraftToken} onSubmit={connect} /> : state.status === 'loading' ? <div className="github-message"><span className="accent-text">◌</span> syncing open pull requests for {config.username}...</div> : state.status === 'error' ? <div className="github-message error-message"><strong>github sync failed</strong><span>{state.error}</span><div><button className="github-action" onClick={() => setConfig({ ...config })}>retry</button><button className="github-action" onClick={disconnect}>change account</button></div></div> : <GitHubDataView data={state.data} username={config.username} onDisconnect={disconnect} />}
   </Panel>
+}
+
+function GitHubSetup({ username, token, onUsernameChange, onTokenChange, onSubmit }) {
+  return <form className="github-setup" onSubmit={onSubmit}>
+    <div><span className="github-setup-icon accent-text" aria-hidden="true">♧</span><div><strong>Connect GitHub to make this panel live.</strong><p>Enter your username for public repositories. Add a Personal Access Token if you want private repositories and a higher API limit.</p></div></div>
+    <div className="github-fields"><label><span>username</span><input value={username} onChange={(event) => onUsernameChange(event.target.value)} placeholder="your-github-name" autoComplete="username" /></label><label><span>token <small>(optional)</small></span><input type="password" value={token} onChange={(event) => onTokenChange(event.target.value)} placeholder="github_pat_..." autoComplete="current-password" /></label><button className="github-connect" type="submit">connect ↵</button></div>
+    <small className="github-security-note">For now, the token stays in this browser’s local storage. We can move it to the Windows keychain when we wrap Start in Tauri.</small>
+  </form>
+}
+
+function GitHubDataView({ data, username, onDisconnect }) {
+  return <div className="github-data"><div className="github-toolbar"><span><span className="accent-text">●</span> connected as {username}</span><button className="github-action" onClick={onDisconnect}>disconnect</button></div><div className="github-scroll-region"><section className="github-section"><div className="github-section-header"><strong>1 · my open PRs</strong><span>{data.mine.length}</span></div>{data.mine.length ? <div className="github-pr-list">{data.mine.map((pr) => <GitHubPRRow key={pr.id} pr={pr} showRepo />)}</div> : <p className="github-empty">No open PRs authored by {username}.</p>}</section><section className="github-section"><div className="github-section-header"><strong>2 · repositories I’ve contributed to</strong><span>{data.repositories.length}</span></div>{data.repositories.length ? <div className="github-repository-list">{data.repositories.map((repository) => repository.pullRequests.length > 5 ? <GitHubRepositorySummary key={repository.name} repository={repository} /> : <div className="github-repository-group" key={repository.name}><div className="github-repository-title"><strong>{repository.name}</strong><span>{repository.pullRequests.length} open</span></div>{repository.pullRequests.map((pr) => <GitHubPRRow key={pr.id} pr={pr} showAuthor />)}</div>)}</div> : <p className="github-empty">No repositories with open PRs authored by {username}.</p>}</section></div></div>
+}
+
+function GitHubPRRow({ pr, showRepo, showAuthor }) {
+  return <a className="github-pr-row" href={pr.url} target="_blank" rel="noreferrer"><span className={`github-pr-icon ${pr.draft ? 'muted-text' : 'accent-text'}`} aria-hidden="true">♧</span><span className="github-pr-copy"><strong>{pr.title}{pr.draft && <small className="draft-label">draft</small>}</strong><small>{showRepo ? `${pr.repo} #${pr.number}` : `#${pr.number}`}{showAuthor ? ` · opened by ${pr.author}` : ''}{pr.branch ? ` · ${pr.branch}` : ''}</small></span><span className="github-pr-updated">{relativeUpdated(pr.updatedAt)}</span><span className="github-external" aria-hidden="true">↗</span></a>
+}
+
+function GitHubRepositorySummary({ repository }) {
+  return <a className="github-repository-summary" href={`https://github.com/${repository.name}/pulls`} target="_blank" rel="noreferrer"><span className="github-pr-icon accent-text" aria-hidden="true">♧</span><span><strong>{repository.name}</strong><small>{repository.pullRequests.length} open PRs · showing repository instead</small></span><span className="github-external" aria-hidden="true">↗</span></a>
 }
 
 createRoot(document.getElementById('root')).render(<StrictMode><App /></StrictMode>)

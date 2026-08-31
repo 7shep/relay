@@ -14,3 +14,7 @@ The first pass is intentionally browser-based and follows the terminal-style das
 ## GitHub setup
 
 The GitHub panel asks for your GitHub username the first time it loads. Public repositories work without a token. Add a read-only GitHub Personal Access Token if you want private repositories or a higher API limit. The current browser MVP stores those values in local storage; the Tauri version can move the token into the Windows keychain.
+
+## Local assistant
+
+The assistant dock targets `qwen2.5:7b` through Ollama at `http://localhost:11434`. It supports text chat and multiple file attachments. Text, Markdown, CSV, and JSON files are included in the request when they are under 200 KB. PDF and office-document extraction is intentionally the next integration step.

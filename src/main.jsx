@@ -130,12 +130,17 @@ async function loadGitHubPullRequests(username, token, signal) {
   const query = encodeURIComponent(`is:pr is:open author:${username}`)
   const authoredItems = await githubPages(`https://api.github.com/search/issues?q=${query}&sort=updated&order=desc`, token, signal)
   const mine = authoredItems.map((item) => normalizePullRequest(item, username))
-  const repoNames = [...new Set(mine.map((item) => item.repo))]
+  const ownedRepositories = await githubPages(`https://api.github.com/users/${encodeURIComponent(username)}/repos?type=owner&sort=updated&direction=desc`, token, signal)
+  const repoNames = ownedRepositories
+    .filter((repository) => repository.owner?.login?.toLowerCase() === username.toLowerCase())
+    .map((repository) => repository.full_name)
+    .filter(Boolean)
   const repositories = []
 
   for (const repo of repoNames) {
     const repoItems = await githubPages(`https://api.github.com/repos/${repo}/pulls?state=open&sort=updated&direction=desc`, token, signal)
-    repositories.push({ name: repo, pullRequests: repoItems.map((item) => normalizePullRequest(item, username, repo)) })
+    const pullRequests = repoItems.map((item) => normalizePullRequest(item, username, repo))
+    if (pullRequests.length) repositories.push({ name: repo, pullRequests })
   }
 
   return { mine, repositories }
@@ -317,6 +322,7 @@ function App() {
         </footer>
       </div>
       {selectedTask && <TaskModal task={selectedTask} onClose={() => setSelectedTask(null)} onToggle={toggleTask} onSave={updateTask} />}
+      <ChatBar />
     </div>
   )
 }
@@ -443,6 +449,92 @@ function TaskModal({ task, onClose, onToggle, onSave }) {
   </div>
 }
 
+function ChatBar() {
+  const [isOpen, setIsOpen] = useState(true)
+  const [draft, setDraft] = useState('')
+  const [files, setFiles] = useState([])
+  const [messages, setMessages] = useState([])
+  const [isSending, setIsSending] = useState(false)
+  const [error, setError] = useState('')
+  const fileInputRef = useRef(null)
+
+  function addFiles(event) {
+    const incoming = [...event.target.files]
+    setFiles((current) => {
+      const existing = new Set(current.map((file) => `${file.name}-${file.lastModified}`))
+      return [...current, ...incoming.filter((file) => !existing.has(`${file.name}-${file.lastModified}`))]
+    })
+    event.target.value = ''
+  }
+
+  function removeFile(fileToRemove) {
+    setFiles((current) => current.filter((file) => file !== fileToRemove))
+  }
+
+  async function submit(event) {
+    event.preventDefault()
+    const prompt = draft.trim()
+    if ((!prompt && !files.length) || isSending) return
+    const attachedFiles = [...files]
+    const fileNames = attachedFiles.map((file) => file.name)
+    const userMessage = { role: 'user', content: prompt || 'Please look at these files.', files: fileNames }
+    const nextMessages = [...messages, userMessage]
+    setMessages(nextMessages)
+    setDraft('')
+    setFiles([])
+    setError('')
+    setIsSending(true)
+
+    try {
+      const fileContext = await Promise.all(attachedFiles.map(async (file) => {
+        if (file.type.startsWith('text/') || /\.(md|txt|csv|json)$/i.test(file.name)) {
+          if (file.size <= 200000) return `\n\n--- ${file.name} ---\n${await file.text()}`
+          return `\n\n--- ${file.name} ---\n[text file is larger than 200 KB; read it locally instead]`
+        }
+        return `\n\n--- ${file.name} ---\n[attached file; PDF and document text extraction will be connected next]`
+      }))
+      const modelResponse = await fetch('http://localhost:11434/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'qwen2.5:7b',
+          stream: false,
+          messages: [
+            { role: 'system', content: 'You are Start, a concise local desktop assistant. Give practical answers. Do not claim to have read an attached PDF or document when only its filename is available.' },
+            ...nextMessages.map((message, index) => ({ role: message.role, content: `${message.content}${message.files?.length ? `\nAttached files: ${message.files.join(', ')}` : ''}${index === nextMessages.length - 1 ? fileContext.join('') : ''}` })),
+          ],
+        }),
+      })
+      if (!modelResponse.ok) throw new Error('Ollama returned an error')
+      const data = await modelResponse.json()
+      setMessages((current) => [...current, { role: 'assistant', content: data.message?.content || 'Qwen returned an empty response.' }])
+    } catch (requestError) {
+      setError(requestError.message === 'Ollama returned an error' ? 'Ollama could not answer. Check that qwen2.5:7b is running.' : 'Could not reach Ollama at localhost:11434.')
+    } finally {
+      setIsSending(false)
+    }
+  }
+
+  return <aside className={`assistant-dock ${isOpen ? 'is-open' : ''}`} aria-label="Local Qwen assistant">
+    <header className="assistant-header"><button className="assistant-title" onClick={() => setIsOpen((current) => !current)} aria-expanded={isOpen}><span className="assistant-prompt">$ qwen --local</span><strong>Ask Start</strong><span className="assistant-model">qwen2.5:7b</span></button><button className="assistant-collapse" onClick={() => setIsOpen((current) => !current)} aria-label={isOpen ? 'Collapse assistant' : 'Expand assistant'}>{isOpen ? '−' : '+'}</button></header>
+    {isOpen && <div className="assistant-content">
+      <div className="assistant-messages" aria-live="polite" aria-busy={isSending}>
+        {!messages.length && <div className="assistant-empty"><span className="accent-text">✦</span><p>Ask about your day, describe a task, or attach files for Qwen to work with.</p></div>}
+        {messages.map((message, index) => <div className={`assistant-message ${message.role}`} key={`${message.role}-${index}`}><span className="message-prefix">{message.role === 'user' ? '&gt;' : '·'}</span><div><p>{message.content}</p>{message.files?.length ? <div className="message-files">{message.files.map((name) => <span key={name}>↳ {name}</span>)}</div> : null}</div></div>)}
+        {isSending && <div className="assistant-message assistant"><span className="message-prefix">·</span><p className="assistant-thinking">Qwen is thinking...</p></div>}
+        {error && <div className="assistant-error" role="alert">{error}</div>}
+      </div>
+      {!!files.length && <div className="attachment-list" aria-label="Attached files">{files.map((file) => <span className="attachment-chip" key={`${file.name}-${file.lastModified}`}><span>{file.name}</span><button type="button" onClick={() => removeFile(file)} aria-label={`Remove ${file.name}`}>×</button></span>)}</div>}
+      <form className="assistant-form" onSubmit={submit}>
+        <button type="button" className="attach-button" onClick={() => fileInputRef.current?.click()} aria-label="Attach files">↥</button>
+        <input ref={fileInputRef} className="visually-hidden-file-input" type="file" multiple accept=".pdf,.txt,.md,.csv,.json,.doc,.docx" onChange={addFiles} />
+        <input value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="ask something..." aria-label="Message Qwen" />
+        <button type="submit" className="assistant-send" disabled={isSending || (!draft.trim() && !files.length)} aria-label="Send message">↵</button>
+      </form>
+    </div>}
+  </aside>
+}
+
 function WeatherPanel({ index, weather, weatherStatus }) {
   const temps = weather.hourly.map((entry) => entry.temp)
   const min = Math.min(...temps)
@@ -511,11 +603,21 @@ function GitHubSetup({ username, token, onUsernameChange, onTokenChange, onSubmi
 }
 
 function GitHubDataView({ data, username, onDisconnect }) {
-  return <div className="github-data"><div className="github-toolbar"><span><span className="accent-text">●</span> connected as {username}</span><button className="github-action" onClick={onDisconnect}>disconnect</button></div><div className="github-scroll-region"><section className="github-section"><div className="github-section-header"><strong>1 · my open PRs</strong><span>{data.mine.length}</span></div>{data.mine.length ? <div className="github-pr-list">{data.mine.map((pr) => <GitHubPRRow key={pr.id} pr={pr} showRepo />)}</div> : <p className="github-empty">No open PRs authored by {username}.</p>}</section><section className="github-section"><div className="github-section-header"><strong>2 · repositories I’ve contributed to</strong><span>{data.repositories.length}</span></div>{data.repositories.length ? <div className="github-repository-list">{data.repositories.map((repository) => repository.pullRequests.length > 5 ? <GitHubRepositorySummary key={repository.name} repository={repository} /> : <div className="github-repository-group" key={repository.name}><div className="github-repository-title"><strong>{repository.name}</strong><span>{repository.pullRequests.length} open</span></div>{repository.pullRequests.map((pr) => <GitHubPRRow key={pr.id} pr={pr} showAuthor />)}</div>)}</div> : <p className="github-empty">No repositories with open PRs authored by {username}.</p>}</section></div></div>
+  const [hiddenPrIds, setHiddenPrIds] = useState(() => new Set())
+  const visibleMine = data.mine.filter((pr) => !hiddenPrIds.has(pr.id))
+  const visibleRepositories = data.repositories
+    .map((repository) => ({ ...repository, pullRequests: repository.pullRequests.filter((pr) => !hiddenPrIds.has(pr.id)) }))
+    .filter((repository) => repository.pullRequests.length)
+
+  function hidePullRequest(prId) {
+    setHiddenPrIds((current) => new Set([...current, prId]))
+  }
+
+  return <div className="github-data"><div className="github-toolbar"><span><span className="accent-text">●</span> connected as {username}</span><button className="github-action" onClick={onDisconnect}>disconnect</button></div><div className="github-scroll-region"><section className="github-section"><div className="github-section-header"><strong>1 · my open PRs</strong><span>{visibleMine.length}</span></div>{visibleMine.length ? <div className="github-pr-list">{visibleMine.map((pr) => <GitHubPRRow key={pr.id} pr={pr} showRepo onHide={hidePullRequest} />)}</div> : <p className="github-empty">No visible open PRs authored by {username}.</p>}</section><section className="github-section"><div className="github-section-header"><strong>2 · repos owned by me</strong><span>{visibleRepositories.length}</span></div>{visibleRepositories.length ? <div className="github-repository-list">{visibleRepositories.map((repository) => repository.pullRequests.length > 5 ? <GitHubRepositorySummary key={repository.name} repository={repository} /> : <div className="github-repository-group" key={repository.name}><div className="github-repository-title"><strong>{repository.name}</strong><span>{repository.pullRequests.length} open</span></div>{repository.pullRequests.map((pr) => <GitHubPRRow key={pr.id} pr={pr} showAuthor onHide={hidePullRequest} />)}</div>)}</div> : <p className="github-empty">No visible owned repositories with open PRs.</p>}</section></div></div>
 }
 
-function GitHubPRRow({ pr, showRepo, showAuthor }) {
-  return <a className="github-pr-row" href={pr.url} target="_blank" rel="noreferrer"><span className={`github-pr-icon ${pr.draft ? 'muted-text' : 'accent-text'}`} aria-hidden="true">♧</span><span className="github-pr-copy"><strong>{pr.title}{pr.draft && <small className="draft-label">draft</small>}</strong><small>{showRepo ? `${pr.repo} #${pr.number}` : `#${pr.number}`}{showAuthor ? ` · opened by ${pr.author}` : ''}{pr.branch ? ` · ${pr.branch}` : ''}</small></span><span className="github-pr-updated">{relativeUpdated(pr.updatedAt)}</span><span className="github-external" aria-hidden="true">↗</span></a>
+function GitHubPRRow({ pr, showRepo, showAuthor, onHide }) {
+  return <div className="github-pr-row"><a className="github-pr-link" href={pr.url} target="_blank" rel="noreferrer"><span className={`github-pr-icon ${pr.draft ? 'muted-text' : 'accent-text'}`} aria-hidden="true">♧</span><span className="github-pr-copy"><strong>{pr.title}{pr.draft && <small className="draft-label">draft</small>}</strong><small>{showRepo ? `${pr.repo} #${pr.number}` : `#${pr.number}`}{showAuthor ? ` · opened by ${pr.author}` : ''}{pr.branch ? ` · ${pr.branch}` : ''}</small></span><span className="github-pr-updated">{relativeUpdated(pr.updatedAt)}</span><span className="github-external" aria-hidden="true">↗</span></a><button type="button" className="github-pr-hide" onClick={() => onHide(pr.id)} aria-label={`Hide ${pr.title}`} title="Hide pull request">×</button></div>
 }
 
 function GitHubRepositorySummary({ repository }) {

@@ -27,7 +27,6 @@ function App() {
   const assignmentsRef = useRef(assignments)
   const lastFocusDayRef = useRef(focusState.day)
   const draftControllerRef = useRef(null)
-  const taskControllerRef = useRef(null)
   const syllabusControllerRef = useRef(null)
 
   useEffect(() => {
@@ -124,8 +123,6 @@ function App() {
 
   useEffect(() => () => syllabusControllerRef.current?.abort(), [])
 
-  useEffect(() => () => taskControllerRef.current?.abort(), [])
-
   const clearAssignments = useCallback(() => {
     clearStoredAssignments()
     setAssignments([])
@@ -151,24 +148,18 @@ function App() {
     setSelectedTask((current) => current && current.id === id ? { ...current, done: !current.done } : current)
   }, [])
 
-  const createTasksFromPrompt = useCallback(async (prompt) => {
-    taskControllerRef.current?.abort()
-    const controller = new AbortController()
-    taskControllerRef.current = controller
+  const createTasksFromPrompt = useCallback(async (prompt, signal) => {
     setTaskStatus('planning')
 
     try {
-      const draftedTasks = await draftTasksFromPrompt(prompt, tasksRef.current, assignmentsRef.current, controller.signal)
-      if (controller.signal.aborted) return []
+      const draftedTasks = await draftTasksFromPrompt(prompt, tasksRef.current, assignmentsRef.current, signal)
+      if (signal?.aborted) return []
       setTasks((current) => [...current, ...draftedTasks])
-      if (draftedTasks[0]) setSelectedTask(draftedTasks[0])
       setTaskStatus(draftedTasks.length ? 'ready' : 'empty')
       return draftedTasks
     } catch (error) {
-      if (!controller.signal.aborted) setTaskStatus('offline')
+      if (!signal?.aborted) setTaskStatus('offline')
       throw error
-    } finally {
-      if (taskControllerRef.current === controller) taskControllerRef.current = null
     }
   }, [])
 
@@ -205,9 +196,9 @@ function App() {
 
         <footer className="system-footer">
           <span>synced 2m ago</span>
-          <span aria-hidden="true">Â·</span>
+          <span aria-hidden="true">&#8226;</span>
           <span>3 sources connected</span>
-          <span aria-hidden="true">Â·</span>
+          <span aria-hidden="true">&#8226;</span>
           <span className="accent-text">all systems nominal</span>
         </footer>
       </div>

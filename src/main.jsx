@@ -1,6 +1,10 @@
 import React, { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
+import * as pdfjsLib from 'pdfjs-dist'
+import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import './styles.css'
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker
 
 const seedTasks = [
   { id: 't1', label: 'Ship auth refresh-token rotation', project: 'orbit-api', estimate: '2h', due: '2026-09-02', description: 'Rotate refresh tokens on every exchange and keep the existing session invalidation path intact.', timeline: ['Review the current token exchange flow', 'Implement rotation and persistence', 'Add coverage for reuse and expiry', 'Open the PR and request review'], done: false },
@@ -109,6 +113,20 @@ ${sources.map((source) => `--- ${source.name} ---\n${source.text}`).join('\n\n')
   const data = await response.json()
   const content = data.message?.content || data.response || ''
   return normalizeSyllabusAssignments(extractJson(content), now, sources.map((source) => source.name))
+}
+
+async function readSyllabusFile(file) {
+  if (!/\.pdf$/i.test(file.name)) return { name: file.name, text: await file.text() }
+  const document = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise
+  const pages = []
+  for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
+    const page = await document.getPage(pageNumber)
+    const content = await page.getTextContent()
+    pages.push(content.items.map((item) => item.str).join(' '))
+  }
+  const text = pages.join('\n\n').trim()
+  if (!text) throw new Error(`${file.name} has no selectable text. Scanned PDFs need OCR before import.`)
+  return { name: file.name, text }
 }
 
 function normalizeDraftTasks(items) {
@@ -425,8 +443,8 @@ function App() {
     setSyllabusState({ status: 'importing', error: '' })
     try {
       const sources = await Promise.all(files.map(async (file) => {
-        if (!/\.(txt|md|csv|json|html?)$/i.test(file.name)) throw new Error(`${file.name} is not a supported text syllabus. Export it as .txt, .md, .csv, .json, or .html.`)
-        return { name: file.name, text: await file.text() }
+        if (!/\.(txt|md|csv|json|html?|pdf)$/i.test(file.name)) throw new Error(`${file.name} is not a supported syllabus. Use .txt, .md, .csv, .json, .html, or .pdf.`)
+        return readSyllabusFile(file)
       }))
       const importedAssignments = await draftAssignmentsFromSyllabi(sources, now, controller.signal)
       if (controller.signal.aborted) return
@@ -913,7 +931,7 @@ function AssignmentsPanel({ now, assignments, index, syllabusState, onImport, on
 
 function SyllabusSetup({ state, onImport }) {
   if (state.status === 'importing') return <div className="assignment-empty"><strong>Qwen is reading your syllabi...</strong><small>Extracting dated assignments, exams, labs, and projects locally.</small></div>
-  return <div className={`assignment-empty ${state.status === 'error' ? 'assignment-error' : ''}`}><strong>{state.status === 'empty' ? 'No assignments found.' : 'Add your syllabi.'}</strong><small>{state.status === 'error' ? state.error : 'Qwen will extract assignments and midterms from text-based syllabus files.'}</small><SyllabusImportButton onImport={onImport} /><small>Supported: .txt, .md, .csv, .json, and .html files.</small></div>
+  return <div className={`assignment-empty ${state.status === 'error' ? 'assignment-error' : ''}`}><strong>{state.status === 'empty' ? 'No assignments found.' : 'Add your syllabi.'}</strong><small>{state.status === 'error' ? state.error : 'Qwen will extract assignments and midterms from text-based syllabus files and PDFs.'}</small><SyllabusImportButton onImport={onImport} /><small>Supported: .txt, .md, .csv, .json, .html, and .pdf files.</small></div>
 }
 
 function SyllabusImportButton({ onImport }) {
@@ -922,7 +940,7 @@ function SyllabusImportButton({ onImport }) {
     onImport(Array.from(event.target.files || []))
     event.target.value = ''
   }
-  return <><input ref={inputRef} className="visually-hidden" type="file" accept=".txt,.md,.csv,.json,.html,.htm,text/plain,text/markdown,text/csv,application/json,text/html" multiple onChange={chooseFiles} /><button type="button" className="syllabus-connect" onClick={() => inputRef.current?.click()}>add syllabus <span aria-hidden="true">↗</span></button></>
+  return <><input ref={inputRef} className="visually-hidden" type="file" accept=".txt,.md,.csv,.json,.html,.htm,.pdf,text/plain,text/markdown,text/csv,application/json,text/html,application/pdf" multiple onChange={chooseFiles} /><button type="button" className="syllabus-connect" onClick={() => inputRef.current?.click()}>add syllabus <span aria-hidden="true">↗</span></button></>
 }
 
 function PullRequestsPanel({ index }) {

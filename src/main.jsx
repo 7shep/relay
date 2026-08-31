@@ -10,15 +10,8 @@ const seedTasks = [
   { id: 't5', label: 'Morning inbox + standup notes', project: 'admin', estimate: '20m', due: '2026-08-31', description: 'Clear the highest-signal messages and capture anything that should become a task later.', timeline: ['Scan unread messages', 'Capture follow-ups', 'Write the standup update'], done: true },
 ]
 
-const assignments = [
-  { id: 'a1', course: 'CS-441', title: 'Distributed consensus write-up', kind: 'essay', dueInHours: 6, weight: '15%' },
-  { id: 'a2', course: 'MATH-312', title: 'Problem set 7 - eigenspaces', kind: 'problem set', dueInHours: 21, weight: '8%' },
-  { id: 'a3', course: 'CS-330', title: 'Lab 4: cache simulator', kind: 'lab', dueInHours: 54, weight: '10%' },
-  { id: 'a4', course: 'PHIL-210', title: 'Reading response - Nagel', kind: 'reading', dueInHours: 96, weight: '5%' },
-  { id: 'a5', course: 'MATH-312', title: 'Midterm exam', kind: 'exam', dueInHours: 168, weight: '30%' },
-]
-
 const FOCUS_STATE_KEY = 'start.focus.state'
+const ASSIGNMENTS_STATE_KEY = 'start.assignments'
 
 function dayKey(date) {
   return [date.getFullYear(), String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0')].join('-')
@@ -33,6 +26,24 @@ function readFocusState(date) {
     return { day: today, tasks: saved.tasks.filter((task) => !task.done), shouldDraft: true }
   } catch {
     return { day: today, tasks: seedTasks, shouldDraft: false }
+  }
+}
+
+function readAssignments() {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(ASSIGNMENTS_STATE_KEY))
+    if (!Array.isArray(saved)) return []
+    return saved.map((item, index) => ({
+      id: String(item?.id || `assignment-${index}`),
+      course: String(item?.course || '').trim(),
+      title: String(item?.title || '').trim(),
+      kind: String(item?.kind || 'assignment').trim(),
+      dueInHours: item?.dueInHours !== undefined && item?.dueInHours !== null && item?.dueInHours !== '' && Number.isFinite(Number(item.dueInHours)) ? Number(item.dueInHours) : null,
+      dueAt: String(item?.dueAt || '').trim(),
+      weight: String(item?.weight || '').trim(),
+    })).filter((item) => item.title)
+  } catch {
+    return []
   }
 }
 
@@ -59,7 +70,7 @@ function normalizeDraftTasks(items) {
   })).filter((task) => task.label)
 }
 
-async function draftFocusTasks(today, carriedTasks, signal) {
+async function draftFocusTasks(today, carriedTasks, assignments, signal) {
   const prompt = `You are Qwen, a local planning assistant. Draft 2 to 4 concrete focus tasks for ${today} from the upcoming assignments and midterms below. Prioritize the closest deadlines and high-weight work. Do not duplicate the carried-over tasks. Return only a JSON array with objects containing exactly: label, project, estimate, due, description, timeline. Use short labels, estimates like "45m" or "2h", ISO dates for due when known, and 2 to 4 timeline steps.\n\nUpcoming assignments:\n${JSON.stringify(assignments)}\n\nCarried-over incomplete tasks:\n${JSON.stringify(carriedTasks)}`
   const response = await fetch('http://localhost:11434/api/chat', {
     method: 'POST',
@@ -279,11 +290,13 @@ function App() {
   const [tasks, setTasks] = useState(() => focusState.tasks)
   const [focusDay, setFocusDay] = useState(() => focusState.day)
   const [focusStatus, setFocusStatus] = useState(() => focusState.shouldDraft ? 'planning' : 'ready')
+  const [assignments] = useState(readAssignments)
   const [showCompleted, setShowCompleted] = useState(true)
   const [selectedTask, setSelectedTask] = useState(null)
   const [weather, setWeather] = useState(fallbackWeather)
   const [weatherStatus, setWeatherStatus] = useState('locating')
   const tasksRef = useRef(tasks)
+  const assignmentsRef = useRef(assignments)
   const lastFocusDayRef = useRef(focusState.day)
   const draftControllerRef = useRef(null)
 
@@ -294,12 +307,16 @@ function App() {
 
   const runFocusDraft = useCallback(async (day, carriedTasks) => {
     draftControllerRef.current?.abort()
+    if (!assignmentsRef.current.length) {
+      setFocusStatus('no-data')
+      return
+    }
     const controller = new AbortController()
     draftControllerRef.current = controller
     setFocusStatus('planning')
 
     try {
-      const draftedTasks = await draftFocusTasks(day, carriedTasks, controller.signal)
+      const draftedTasks = await draftFocusTasks(day, carriedTasks, assignmentsRef.current, controller.signal)
       if (controller.signal.aborted || lastFocusDayRef.current !== day) return
       setTasks((current) => [...current, ...draftedTasks])
       setFocusStatus(draftedTasks.length ? 'ready' : 'offline')
@@ -419,7 +436,7 @@ function App() {
 
           <div className="side-stack">
             <WeatherPanel index={1} weather={weather} weatherStatus={weatherStatus} />
-            <AssignmentsPanel now={now} index={2} />
+            <AssignmentsPanel now={now} assignments={assignments} index={2} />
           </div>
 
           <PullRequestsPanel index={3} />
@@ -468,7 +485,7 @@ function FocusTasks({ tasks, onAdd, onOpen, showCompleted, onToggleCompleted, fo
   const completed = tasks.filter((task) => task.done).length
   const visible = showCompleted ? tasks : tasks.filter((task) => !task.done)
   const progress = tasks.length === 0 ? 0 : Math.round((completed / tasks.length) * 100)
-  const syncLabel = focusStatus === 'planning' ? 'Qwen drafting...' : focusStatus === 'offline' ? 'Qwen unavailable' : ''
+  const syncLabel = focusStatus === 'planning' ? 'Qwen drafting...' : focusStatus === 'offline' ? 'Qwen unavailable' : focusStatus === 'no-data' ? 'no assignments' : ''
 
   function submit(event) {
     event.preventDefault()
@@ -731,10 +748,14 @@ function WeatherPanel({ index, weather, weatherStatus }) {
   </Panel>
 }
 
-function AssignmentsPanel({ now, index }) {
-  const soon = assignments.filter((item) => item.dueInHours <= 24).length
+function AssignmentsPanel({ now, assignments, index }) {
+  const soon = assignments.filter((item) => Number.isFinite(item.dueInHours) && item.dueInHours <= 24).length
   return <Panel path="~/edu/assignments" index={index} className="assignments-panel" meta={<span>{assignments.length} queued <b className="danger-text">· {soon} due &lt;24h</b></span>}>
-    <ol className="assignment-list"><span className="assignment-line" aria-hidden="true" />{assignments.map((item) => <li key={item.id}><span className={`assignment-dot ${item.dueInHours <= 12 ? 'danger-dot' : item.dueInHours <= 48 ? 'warn-dot' : ''}`} aria-hidden="true" /><div><div className="assignment-title"><strong>{item.title}</strong><span className={item.dueInHours <= 12 ? 'danger-text' : item.dueInHours <= 48 ? 'warn-text' : ''}>{dueLabel(item.dueInHours)}</span></div><small>{item.course} · {item.kind} · {item.weight} of grade · due {dueClock(item.dueInHours, now)}</small></div></li>)}</ol>
+    {assignments.length ? <ol className="assignment-list"><span className="assignment-line" aria-hidden="true" />{assignments.map((item) => {
+      const dueHours = Number.isFinite(item.dueInHours) ? item.dueInHours : null
+      const dueText = item.dueAt || (dueHours === null ? 'date not set' : dueClock(dueHours, now))
+      return <li key={item.id}><span className={`assignment-dot ${dueHours !== null && dueHours <= 12 ? 'danger-dot' : dueHours !== null && dueHours <= 48 ? 'warn-dot' : ''}`} aria-hidden="true" /><div><div className="assignment-title"><strong>{item.title}</strong><span className={dueHours !== null && dueHours <= 12 ? 'danger-text' : dueHours !== null && dueHours <= 48 ? 'warn-text' : ''}>{dueHours === null ? '—' : dueLabel(dueHours)}</span></div><small>{[item.course, item.kind, item.weight && `${item.weight} of grade`, `due ${dueText}`].filter(Boolean).join(' · ')}</small></div></li>
+    })}</ol> : <div className="assignment-empty"><strong>No assignments loaded.</strong><small>Connect a calendar to populate this queue for Qwen.</small></div>}
   </Panel>
 }
 

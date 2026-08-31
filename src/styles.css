@@ -124,6 +124,9 @@ h1 { display: flex; align-items: baseline; margin-top: 7px; color: var(--term-te
 .assignment-title strong { min-width: 0; overflow: hidden; color: var(--term-text); font-size: 11px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
 .assignment-title span { flex: 0 0 auto; color: var(--term-muted); font-size: 9px; }
 .assignment-list small { display: block; overflow: hidden; margin-top: 3px; color: var(--term-muted); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.assignment-empty { display: grid; gap: 6px; padding: 18px 10px; color: var(--term-muted); font-size: 10px; }
+.assignment-empty strong { color: var(--term-text); font-weight: 400; }
+.assignment-empty small { font-size: 8px; line-height: 1.5; }
 
 .pulls-scroll { overflow-x: auto; }
 table { width: 100%; min-width: 720px; border-collapse: collapse; text-align: left; }

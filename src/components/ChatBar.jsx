@@ -11,10 +11,24 @@ const suggestedPrompts = [
 
 const CHAT_ACTIVITY_LABELS = ['Thinking', 'Combobulating', 'Checking the dashboard', 'Writing']
 
-function isTaskPrompt(prompt) {
+function shouldCaptureTasks(prompt) {
   const mentionsTask = /\b(tasks?|todo|to-do|focus item|focus list)\b/i.test(prompt)
   const requestsCreation = /\b(add|create|capture|make)\b/i.test(prompt) || /\b(turn|convert)\b[\s\S]*\binto\b/i.test(prompt)
-  return mentionsTask && requestsCreation
+  if (mentionsTask && requestsCreation) return true
+
+  const planningIntent = /\b(plan|planning|organize|prioritize|schedule|triage|break down|where do i start|what should I (do|tackle|work on|prioritize)|which .+ first|how should I)\b/i.test(prompt)
+  const workContext = /\b(today|tomorrow|this week|this afternoon|this morning|my day|deadline|due|assignment|project|study|work|write|finish|complete|review|submit|need to|have to|should|pull request|\bpr\b)\b/i.test(prompt)
+  const timeContext = /\b(today|tomorrow|this week|this afternoon|this morning|my day|deadline|due)\b/i.test(prompt)
+  const concreteWork = /\b(need to|have to|finish|complete|work on|write|study|review|submit|call|email|prepare)\b/i.test(prompt)
+  const multipleItems = /,|;|\band\b/i.test(prompt)
+  return (planningIntent && workContext) || (timeContext && concreteWork) || (concreteWork && multipleItems)
+}
+
+function taskUpdate(tasks) {
+  if (tasks?.error) return `\n\n*I answered normally, but could not update the focus taskbar: ${tasks.error.message}*`
+  if (!tasks) return ''
+  if (!tasks.length) return '\n\n*No new focus tasks detected in that request.*'
+  return `\n\n**Added to focus:**\n${tasks.map((task, index) => `${index + 1}. **${task.label}** — ${task.project}, ${task.estimate}${task.due ? `, due ${task.due}` : ''}`).join('\n')}`
 }
 
 export default function ChatBar({ tasks, assignments, onCreateTasks }) {
@@ -48,7 +62,7 @@ export default function ChatBar({ tasks, assignments, onCreateTasks }) {
     const prompt = value.trim()
     if (!prompt || isStreaming) return
     const assistantId = Date.now()
-    const context = `Dashboard context:\nFocus tasks:\n${JSON.stringify(tasks)}\n\nAssignment queue:\n${JSON.stringify(assignments)}`
+    const context = `Dashboard context and available actions:\n- Focus taskbar: Qwen can add concrete focus tasks; the user can open, edit, complete, and restore them.\n- Assignment queue: read-only items extracted from imported syllabi.\n- GitHub panel: read-only open pull requests and repository pull requests.\n- Weather panel: today's local forecast when available.\n\nCurrent focus tasks:\n${JSON.stringify(tasks)}\n\nAssignment queue:\n${JSON.stringify(assignments)}`
     const history = messages.filter((message) => message.role === 'user' || (message.role === 'assistant' && message.content)).slice(-8).map((message) => ({ role: message.role, content: message.content }))
     setMessages((current) => [...current, { role: 'user', content: prompt }, { id: assistantId, role: 'assistant', content: '', thinking: '', phase: 'thinking', activity: CHAT_ACTIVITY_LABELS[0] }])
     setDraft('')
@@ -56,33 +70,31 @@ export default function ChatBar({ tasks, assignments, onCreateTasks }) {
     setIsStreaming(true)
     const controller = new AbortController()
     chatControllerRef.current = controller
+    const captureTasks = shouldCaptureTasks(prompt)
+    const taskPromise = captureTasks
+      ? onCreateTasks(prompt, controller.signal)
+        .then((draftedTasks) => ({ tasks: draftedTasks }))
+        .catch((error) => ({ error }))
+      : Promise.resolve(null)
     let activityIndex = 0
     activityTimerRef.current = window.setInterval(() => {
       activityIndex = (activityIndex + 1) % CHAT_ACTIVITY_LABELS.length
       setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, activity: CHAT_ACTIVITY_LABELS[activityIndex] } : message))
     }, 1400)
     try {
-      if (isTaskPrompt(prompt)) {
-        const draftedTasks = await onCreateTasks(prompt)
-        if (!controller.signal.aborted) {
-          const summary = draftedTasks.length
-            ? `Added ${draftedTasks.length} focus task${draftedTasks.length === 1 ? '' : 's'} through Qwen.\n\n${draftedTasks.map((task, index) => `${index + 1}. **${task.label}** - ${task.project}, ${task.estimate}${task.due ? `, due ${task.due}` : ''}`).join('\n')}`
-            : 'Qwen could not turn that request into a concrete focus task.'
-          setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, phase: 'done', content: summary, thoughtSeconds: Math.max(1, Math.round((Date.now() - assistantId) / 1000)) } : message))
-        }
-      } else {
-        await streamQwenChat([
-          { role: 'system', content: SIDEBAR_CHAT_SYSTEM_PROMPT },
-          ...history,
-          { role: 'user', content: `${prompt}\n\n${context}` },
-        ], ({ content, thinking }) => {
-          if (!content && !thinking) return
-          setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, phase: content ? 'answering' : message.phase, content: `${message.content}${content}`, thinking: `${message.thinking}${thinking}` } : message))
-        }, controller.signal)
-        if (!controller.signal.aborted) setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, phase: 'done', thoughtSeconds: Math.max(1, Math.round((Date.now() - assistantId) / 1000)) } : message))
-      }
+      await streamQwenChat([
+        { role: 'system', content: SIDEBAR_CHAT_SYSTEM_PROMPT },
+        ...history,
+        { role: 'user', content: `${prompt}\n\n${context}` },
+      ], ({ content, thinking }) => {
+        if (!content && !thinking) return
+        setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, phase: content ? 'answering' : message.phase, content: `${message.content}${content}`, thinking: `${message.thinking}${thinking}` } : message))
+      }, controller.signal)
+      const taskResult = await taskPromise
+      if (!controller.signal.aborted) setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, phase: 'done', content: `${message.content}${taskUpdate(taskResult)}`, thoughtSeconds: Math.max(1, Math.round((Date.now() - assistantId) / 1000)) } : message))
     } catch (error) {
-      if (!controller.signal.aborted) setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, phase: 'error', activity: 'Qwen unavailable', content: `I couldnâ€™t reach local Qwen. Start Ollama and make sure qwen2.5:7b is installed.\n\n${error.message}` } : message))
+      const taskResult = await taskPromise
+      if (!controller.signal.aborted) setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, phase: 'error', activity: 'Qwen unavailable', content: `I couldnâ€™t reach local Qwen. Start Ollama and make sure qwen2.5:7b is installed.\n\n${error.message}${taskUpdate(taskResult)}` } : message))
     } finally {
       if (activityTimerRef.current) window.clearInterval(activityTimerRef.current)
       activityTimerRef.current = null
@@ -118,7 +130,7 @@ export default function ChatBar({ tasks, assignments, onCreateTasks }) {
       <div ref={scrollRef} className="assistant-messages" aria-live="polite" aria-busy={isStreaming}>
         {!messages.length ? <div className="assistant-empty-state">
           <p><span className="accent-text">assistant</span> connected to this dashboard.</p>
-          <p>It can see your focus list, assignment queue, open pull requests, and todayâ€™s forecast. Ask it to triage, plan, or explain anything on screen.</p>
+          <p>It can see your focus list, assignment queue, open pull requests, and todayâ€™s forecast. Ask it to triage, plan, or explain anything on screen; concrete planning work is added to your focus list automatically.</p>
           <div className="assistant-prompts">{suggestedPrompts.map((prompt) => <button key={prompt} type="button" onClick={() => send(prompt)}><span aria-hidden="true">&gt;</span>{prompt}</button>)}</div>
         </div> : messages.map((message, index) => message.role === 'user' ? <div className="assistant-user-message" key={`${message.role}-${index}`}>{message.content}</div> : <div className="assistant-response" key={message.id}>
           <button type="button" className="assistant-thinking-toggle" onClick={() => setThinkingOpen((value) => !value)} aria-expanded={thinkingOpen}><span aria-hidden="true">â€º</span>{message.phase === 'done' ? `Thought for ${message.thoughtSeconds || 1}s` : message.activity || 'Thinking'}</button>

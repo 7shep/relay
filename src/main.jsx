@@ -691,7 +691,7 @@ function ChatBar() {
   return <aside className={`assistant-dock ${isOpen ? 'is-open' : 'is-collapsed'}`} aria-label="Assistant sidebar">
     {isOpen ? <>
       <header className="assistant-header">
-        <h2><span className="assistant-spark" aria-hidden="true">✣</span><span>~/assistant</span><span className="assistant-model">gpt-5-mini</span></h2>
+        <h2><span className="assistant-spark" aria-hidden="true">✣</span><span>~/assistant</span><span className="assistant-model">qwen-2.5-7b</span></h2>
         <div className="assistant-actions">
           <button type="button" className="assistant-icon-button" onClick={reset} aria-label="New conversation" title="New conversation">↻</button>
           <button type="button" className="assistant-icon-button" onClick={() => setIsOpen(false)} aria-label="Collapse assistant" title="Collapse assistant">⇥</button>

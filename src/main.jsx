@@ -425,7 +425,6 @@ function App() {
     setSyllabusState({ status: 'importing', error: '' })
     try {
       const sources = await Promise.all(files.map(async (file) => {
-        if (file.size > 500 * 1024) throw new Error(`${file.name} is larger than 500 KB.`)
         if (!/\.(txt|md|csv|json|html?)$/i.test(file.name)) throw new Error(`${file.name} is not a supported text syllabus. Export it as .txt, .md, .csv, .json, or .html.`)
         return { name: file.name, text: await file.text() }
       }))
@@ -914,7 +913,7 @@ function AssignmentsPanel({ now, assignments, index, syllabusState, onImport, on
 
 function SyllabusSetup({ state, onImport }) {
   if (state.status === 'importing') return <div className="assignment-empty"><strong>Qwen is reading your syllabi...</strong><small>Extracting dated assignments, exams, labs, and projects locally.</small></div>
-  return <div className={`assignment-empty ${state.status === 'error' ? 'assignment-error' : ''}`}><strong>{state.status === 'empty' ? 'No assignments found.' : 'Add your syllabi.'}</strong><small>{state.status === 'error' ? state.error : 'Qwen will extract assignments and midterms from text-based syllabus files.'}</small><SyllabusImportButton onImport={onImport} /><small>Supported: .txt, .md, .csv, .json, and .html files up to 500 KB each.</small></div>
+  return <div className={`assignment-empty ${state.status === 'error' ? 'assignment-error' : ''}`}><strong>{state.status === 'empty' ? 'No assignments found.' : 'Add your syllabi.'}</strong><small>{state.status === 'error' ? state.error : 'Qwen will extract assignments and midterms from text-based syllabus files.'}</small><SyllabusImportButton onImport={onImport} /><small>Supported: .txt, .md, .csv, .json, and .html files.</small></div>
 }
 
 function SyllabusImportButton({ onImport }) {

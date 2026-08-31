@@ -17,7 +17,7 @@ The GitHub panel asks for your GitHub username the first time it loads. Public r
 
 ## Assignments
 
-The assignments panel uses local Qwen through Ollama to extract assignments, exams, labs, projects, and due dates from syllabus text. Click `add syllabus` and select `.txt`, `.md`, `.csv`, `.json`, or `.html` files up to 500 KB each. Extracted assignments are normalized and stored in browser local storage so Qwen can use them when drafting the daily focus list.
+The assignments panel uses local Qwen through Ollama to extract assignments, exams, labs, projects, and due dates from syllabus text. Click `add syllabus` and select `.txt`, `.md`, `.csv`, `.json`, or `.html` files. Extracted assignments are normalized and stored in browser local storage so Qwen can use them when drafting the daily focus list.
 
 ## Local assistant
 

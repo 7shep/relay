@@ -9,7 +9,7 @@ npm install
 npm run dev
 ```
 
-The first pass is intentionally browser-based and follows the terminal-style dashboard reference. It includes a live clock and greeting, weather, focus tasks with progress and quick add, upcoming assignments, live GitHub pull requests, responsive layout, and reduced-motion support.
+The first pass is intentionally browser-based and follows the terminal-style dashboard reference. It includes a live clock and greeting, weather, Qwen-planned focus tasks, upcoming assignments, live GitHub pull requests, responsive layout, and reduced-motion support.
 
 ## GitHub setup
 
@@ -21,4 +21,4 @@ The assignments panel uses local Qwen through Ollama to extract assignments, exa
 
 ## Local assistant
 
-The assistant dock sends real streaming chat requests to local Ollama at `http://localhost:11434` using `qwen2.5:7b`. Start Ollama and pull that model before chatting. Each request includes the current focus tasks and extracted assignment queue, and the sidebar cycles through live activity labels while the response is generating.
+The assistant dock sends real streaming chat requests to local Ollama at `http://localhost:11434` using `qwen2.5:7b`. Start Ollama and pull that model before chatting. Each request includes the current focus tasks and extracted assignment queue, and the sidebar cycles through live activity labels while the response is generating. To add focus work, ask the assistant to add or create a task; Qwen fills the task label, project, estimate, due date, description, and timeline before adding it to the list. When every task is complete, the list defaults to an `everything checked off` state; click the done count to reveal completed tasks again.

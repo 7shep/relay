@@ -91,12 +91,6 @@ h1 { display: flex; align-items: baseline; margin-top: 7px; color: var(--term-te
 .focus-task:hover .task-open, .focus-task:focus-visible .task-open { opacity: 1; color: var(--term-accent); transform: translate(1px, -1px); }
 .empty-task { padding: 33px 10px; color: var(--term-accent); text-align: center; }
 .empty-task small { display: block; margin-top: 6px; color: var(--term-muted); }
-.add-task-form { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-top: 1px solid var(--term-border); }
-.add-task-form label { color: var(--term-accent); }
-.add-task-form input { min-width: 0; flex: 1; border: 0; outline: 0; color: var(--term-text); background: transparent; font-size: 12px; }
-.add-task-form input::placeholder { color: var(--term-muted); }
-.add-task-form button { padding: 4px 7px; border: 1px solid var(--term-border); color: var(--term-muted); background: transparent; font-size: 10px; }
-.add-task-form button:hover { border-color: var(--term-accent-line); color: var(--term-accent); }
 
 .weather-details { display: flex; justify-content: space-between; gap: 15px; padding: 12px 10px; }
 .large-temp { display: block; color: var(--term-text); font-size: 27px; font-weight: 400; letter-spacing: -0.06em; line-height: 1; }

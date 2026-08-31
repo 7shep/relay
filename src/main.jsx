@@ -165,6 +165,38 @@ async function draftFocusTasks(today, carriedTasks, assignments, signal) {
   return normalizeDraftTasks(extractJson(content))
 }
 
+async function draftTasksFromPrompt(prompt, currentTasks, assignments, signal) {
+  const today = dayKey(new Date())
+  const request = `You are Qwen, a local task-planning assistant. Turn the user's request into one to three concrete focus tasks. Fill in every field using the request, the assignment queue, and reasonable planning judgment. Do not invent deadlines or grading weights. Return only a JSON object with a tasks array. Each task must contain exactly: label, project, estimate, due, description, timeline. Use short labels, estimates like "45m" or "2h", ISO dates for due when known, and 2 to 4 timeline steps.
+
+Today: ${today}
+User request: ${prompt}
+
+Current focus tasks:
+${JSON.stringify(currentTasks)}
+
+Assignment queue:
+${JSON.stringify(assignments)}`
+  const response = await fetch('http://localhost:11434/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal,
+    body: JSON.stringify({
+      model: 'qwen2.5:7b',
+      stream: false,
+      format: 'json',
+      messages: [
+        { role: 'system', content: 'Create complete, actionable focus tasks. Output valid JSON only.' },
+        { role: 'user', content: request },
+      ],
+    }),
+  })
+  if (!response.ok) throw new Error(`Qwen returned ${response.status}`)
+  const data = await response.json()
+  const content = data.message?.content || data.response || ''
+  return normalizeDraftTasks(extractJson(content))
+}
+
 const fallbackWeather = {
   location: 'Current location',
   temp: 20,
@@ -365,7 +397,8 @@ function App() {
   const [focusStatus, setFocusStatus] = useState(() => focusState.shouldDraft ? 'planning' : 'ready')
   const [assignments, setAssignments] = useState(readAssignments)
   const [syllabusState, setSyllabusState] = useState({ status: 'idle', error: '' })
-  const [showCompleted, setShowCompleted] = useState(true)
+  const [showCompleted, setShowCompleted] = useState(() => !(focusState.tasks.length && focusState.tasks.every((task) => task.done)))
+  const [taskStatus, setTaskStatus] = useState('idle')
   const [selectedTask, setSelectedTask] = useState(null)
   const [weather, setWeather] = useState(fallbackWeather)
   const [weatherStatus, setWeatherStatus] = useState('locating')
@@ -373,6 +406,7 @@ function App() {
   const assignmentsRef = useRef(assignments)
   const lastFocusDayRef = useRef(focusState.day)
   const draftControllerRef = useRef(null)
+  const taskControllerRef = useRef(null)
   const syllabusControllerRef = useRef(null)
 
   useEffect(() => {
@@ -417,6 +451,10 @@ function App() {
       // Assignment data still remains available for this session when storage is unavailable.
     }
   }, [assignments])
+
+  useEffect(() => {
+    if (tasks.length && tasks.every((task) => task.done)) setShowCompleted(false)
+  }, [tasks])
 
   useEffect(() => {
     if (focusState.shouldDraft) runFocusDraft(focusState.day, tasksRef.current)
@@ -464,6 +502,8 @@ function App() {
   }, [now])
 
   useEffect(() => () => syllabusControllerRef.current?.abort(), [])
+
+  useEffect(() => () => taskControllerRef.current?.abort(), [])
 
   const clearAssignments = useCallback(() => {
     window.localStorage.removeItem(ASSIGNMENTS_STATE_KEY)
@@ -525,10 +565,25 @@ function App() {
     setSelectedTask((current) => current && current.id === id ? { ...current, done: !current.done } : current)
   }, [])
 
-  const addTask = useCallback((label) => {
-    const nextTask = { id: `t${Date.now()}`, label, project: 'inbox', estimate: '30m', due: '', description: 'Captured from the focus input. Add more context so the next step is obvious.', timeline: ['Define the first concrete step', 'Make a small block of progress', 'Review and decide what comes next'], done: false }
-    setTasks((current) => [...current, nextTask])
-    setSelectedTask(nextTask)
+  const createTasksFromPrompt = useCallback(async (prompt) => {
+    taskControllerRef.current?.abort()
+    const controller = new AbortController()
+    taskControllerRef.current = controller
+    setTaskStatus('planning')
+
+    try {
+      const draftedTasks = await draftTasksFromPrompt(prompt, tasksRef.current, assignmentsRef.current, controller.signal)
+      if (controller.signal.aborted) return []
+      setTasks((current) => [...current, ...draftedTasks])
+      if (draftedTasks[0]) setSelectedTask(draftedTasks[0])
+      setTaskStatus(draftedTasks.length ? 'ready' : 'empty')
+      return draftedTasks
+    } catch (error) {
+      if (!controller.signal.aborted) setTaskStatus('offline')
+      throw error
+    } finally {
+      if (taskControllerRef.current === controller) taskControllerRef.current = null
+    }
   }, [])
 
   const updateTask = useCallback((id, updates) => {
@@ -546,11 +601,11 @@ function App() {
         <main className="dashboard-grid">
           <FocusTasks
             tasks={tasks}
-            onAdd={addTask}
             onOpen={setSelectedTask}
             showCompleted={showCompleted}
             onToggleCompleted={() => setShowCompleted((current) => !current)}
             focusStatus={focusStatus}
+            taskStatus={taskStatus}
             index={0}
           />
 
@@ -571,7 +626,7 @@ function App() {
         </footer>
       </div>
       {selectedTask && <TaskModal task={selectedTask} onClose={() => setSelectedTask(null)} onToggle={toggleTask} onSave={updateTask} />}
-      <ChatBar tasks={tasks} assignments={assignments} />
+      <ChatBar tasks={tasks} assignments={assignments} onCreateTasks={createTasksFromPrompt} />
     </div>
   )
 }
@@ -601,23 +656,15 @@ function Panel({ path, meta, children, primary = false, index = 0, className = '
   )
 }
 
-function FocusTasks({ tasks, onAdd, onOpen, showCompleted, onToggleCompleted, focusStatus, index }) {
+function FocusTasks({ tasks, onOpen, showCompleted, onToggleCompleted, focusStatus, taskStatus, index }) {
   const completed = tasks.filter((task) => task.done).length
   const visible = showCompleted ? tasks : tasks.filter((task) => !task.done)
   const progress = tasks.length === 0 ? 0 : Math.round((completed / tasks.length) * 100)
-  const syncLabel = focusStatus === 'planning' ? 'Qwen drafting...' : focusStatus === 'offline' ? 'Qwen unavailable' : ''
-
-  function submit(event) {
-    event.preventDefault()
-    const input = event.currentTarget.elements.task
-    const label = input.value.trim()
-    if (!label) return
-    onAdd(label)
-    input.value = ''
-  }
+  const syncLabel = taskStatus === 'planning' ? 'Qwen drafting task...' : taskStatus === 'offline' ? 'Qwen unavailable' : focusStatus === 'planning' ? 'Qwen drafting...' : focusStatus === 'offline' ? 'Qwen unavailable' : ''
+  const syncState = taskStatus === 'planning' || taskStatus === 'offline' ? taskStatus : focusStatus
 
   return (
-    <Panel path="~/focus/today.md" primary index={index} className="focus-panel" meta={<span className="focus-meta"><button className="panel-meta-button" onClick={onToggleCompleted}>{completed}/{tasks.length} done</button>{syncLabel && <span className={`focus-sync-status ${focusStatus}`}> · {syncLabel}</span>}</span>}>
+    <Panel path="~/focus/today.md" primary index={index} className="focus-panel" meta={<span className="focus-meta"><button type="button" className="panel-meta-button" onClick={onToggleCompleted}>{completed}/{tasks.length} done</button>{syncLabel && <span className={`focus-sync-status ${syncState}`}> · {syncLabel}</span>}</span>}>
       <div className="progress-row"><div className="progress-track"><span style={{ width: `${progress}%` }} /></div><span>{progress}%</span></div>
       <ul className="focus-list">
         {visible.map((task, position) => {
@@ -627,9 +674,8 @@ function FocusTasks({ tasks, onAdd, onOpen, showCompleted, onToggleCompleted, fo
             <span className="task-text"><strong>{task.label}</strong><small>{String(position + 1).padStart(2, '0')} · {task.project} · est {task.estimate}{isNext && <em> · up next</em>}</small></span><span className="task-open" aria-hidden="true">↗</span>
           </button></li>
         })}
-        {visible.length === 0 && <li className="empty-task">everything checked off.<small>Add something below or close the laptop.</small></li>}
+        {visible.length === 0 && <li className="empty-task">everything checked off.<small>Ask Qwen in the assistant to add another focus task.</small></li>}
       </ul>
-      <form className="add-task-form" onSubmit={submit}><label htmlFor="new-task">&gt;</label><input id="new-task" name="task" placeholder="add a focus task..." autoComplete="off" /><button type="submit">+ add</button></form>
     </Panel>
   )
 }
@@ -707,6 +753,12 @@ const suggestedPrompts = [
 
 const CHAT_ACTIVITY_LABELS = ['Thinking', 'Combobulating', 'Checking the dashboard', 'Writing']
 
+function isTaskPrompt(prompt) {
+  const mentionsTask = /\b(tasks?|todo|to-do|focus item|focus list)\b/i.test(prompt)
+  const requestsCreation = /\b(add|create|capture|make)\b/i.test(prompt) || /\b(turn|convert)\b[\s\S]*\binto\b/i.test(prompt)
+  return mentionsTask && requestsCreation
+}
+
 function renderInline(text, keyPrefix) {
   return text.split(/(\*\*.*?\*\*|`.*?`)/g).map((part, index) => {
     const key = `${keyPrefix}-${index}`
@@ -765,7 +817,7 @@ async function streamQwenChat(messages, onChunk, signal) {
   }
 }
 
-function ChatBar({ tasks, assignments }) {
+function ChatBar({ tasks, assignments, onCreateTasks }) {
   const [isOpen, setIsOpen] = useState(true)
   const [draft, setDraft] = useState('')
   const [messages, setMessages] = useState([])
@@ -810,15 +862,25 @@ function ChatBar({ tasks, assignments }) {
       setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, activity: CHAT_ACTIVITY_LABELS[activityIndex] } : message))
     }, 1400)
     try {
-      await streamQwenChat([
-        { role: 'system', content: 'You are Qwen, the local assistant inside the Start dashboard. Be concise, practical, and ground your answer in the dashboard context. Explain your recommendation briefly, and never claim to have taken an action you did not take.' },
-        ...history,
-        { role: 'user', content: `${prompt}\n\n${context}` },
-      ], ({ content, thinking }) => {
-        if (!content && !thinking) return
-        setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, phase: content ? 'answering' : message.phase, content: `${message.content}${content}`, thinking: `${message.thinking}${thinking}` } : message))
-      }, controller.signal)
-      if (!controller.signal.aborted) setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, phase: 'done', thoughtSeconds: Math.max(1, Math.round((Date.now() - assistantId) / 1000)) } : message))
+      if (isTaskPrompt(prompt)) {
+        const draftedTasks = await onCreateTasks(prompt)
+        if (!controller.signal.aborted) {
+          const summary = draftedTasks.length
+            ? `Added ${draftedTasks.length} focus task${draftedTasks.length === 1 ? '' : 's'} through Qwen.\n\n${draftedTasks.map((task, index) => `${index + 1}. **${task.label}** - ${task.project}, ${task.estimate}${task.due ? `, due ${task.due}` : ''}`).join('\n')}`
+            : 'Qwen could not turn that request into a concrete focus task.'
+          setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, phase: 'done', content: summary, thoughtSeconds: Math.max(1, Math.round((Date.now() - assistantId) / 1000)) } : message))
+        }
+      } else {
+        await streamQwenChat([
+          { role: 'system', content: 'You are Qwen, the local assistant inside the Start dashboard. Be concise, practical, and ground your answer in the dashboard context. Explain your recommendation briefly, and never claim to have taken an action you did not take.' },
+          ...history,
+          { role: 'user', content: `${prompt}\n\n${context}` },
+        ], ({ content, thinking }) => {
+          if (!content && !thinking) return
+          setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, phase: content ? 'answering' : message.phase, content: `${message.content}${content}`, thinking: `${message.thinking}${thinking}` } : message))
+        }, controller.signal)
+        if (!controller.signal.aborted) setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, phase: 'done', thoughtSeconds: Math.max(1, Math.round((Date.now() - assistantId) / 1000)) } : message))
+      }
     } catch (error) {
       if (!controller.signal.aborted) setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, phase: 'error', activity: 'Qwen unavailable', content: `I couldn’t reach local Qwen. Start Ollama and make sure qwen2.5:7b is installed.\n\n${error.message}` } : message))
     } finally {

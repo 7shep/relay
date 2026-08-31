@@ -571,7 +571,7 @@ function App() {
         </footer>
       </div>
       {selectedTask && <TaskModal task={selectedTask} onClose={() => setSelectedTask(null)} onToggle={toggleTask} onSave={updateTask} />}
-      <ChatBar />
+      <ChatBar tasks={tasks} assignments={assignments} />
     </div>
   )
 }
@@ -705,30 +705,7 @@ const suggestedPrompts = [
   'Summarize my week',
 ]
 
-const assistantReply = {
-  thinking: 'Checked task due dates, current time, and recent PR metadata.',
-  answer: `Here's how I'd sequence the rest of your day.
-
-**Suggested blocks**
-
-1. **14:45 – 16:15 – CS-441 write-up.** Hard deadline in 6h and worth 15% of the grade.
-   Nothing else in the board is time-boxed this tightly.
-2. **16:15 – 16:45 – Review Priya's scheduler PR.** Short, and it's currently blocking someone else. CI is red on it, so flag the failing job in your review rather than leaving every line.
-3. **16:45 – 18:45 – Ship refresh-token rotation.** \`orbit-api#1842\` is already approved with green checks, so this is merge-and-monitor rather than new work.
-
-**What I'd drop**
-
-- The flaky snapshot tests are already checked off, so ignore them.
-- \`dotfiles#77\` is a draft with no reviewer waiting – leave it for the weekend.
-
-> Rain probability climbs to 35% around 19:00, so if you run planning to walk, go before 18:00.
-
-Want me to rewrite your focus list in this order?`,
-}
-
-function tokenize(text) {
-  return text.split(/(\s+)/).filter(Boolean)
-}
+const CHAT_ACTIVITY_LABELS = ['Thinking', 'Combobulating', 'Checking the dashboard', 'Writing']
 
 function renderInline(text, keyPrefix) {
   return text.split(/(\*\*.*?\*\*|`.*?`)/g).map((part, index) => {
@@ -754,70 +731,112 @@ function AssistantMarkdown({ text }) {
   })}</div>
 }
 
-function ChatBar() {
+async function streamQwenChat(messages, onChunk, signal) {
+  const response = await fetch('http://localhost:11434/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal,
+    body: JSON.stringify({ model: 'qwen2.5:7b', stream: true, messages }),
+  })
+  if (!response.ok) throw new Error(`Qwen returned ${response.status}`)
+  if (!response.body) {
+    const data = await response.json()
+    onChunk({ content: data.message?.content || data.response || '', thinking: data.message?.thinking || data.thinking || '' })
+    return
+  }
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  while (true) {
+    const { value, done } = await reader.read()
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() || ''
+    lines.forEach((line) => {
+      if (!line.trim()) return
+      const data = JSON.parse(line)
+      onChunk({ content: data.message?.content || data.response || '', thinking: data.message?.thinking || data.thinking || '' })
+    })
+    if (done) break
+  }
+  if (buffer.trim()) {
+    const data = JSON.parse(buffer)
+    onChunk({ content: data.message?.content || data.response || '', thinking: data.message?.thinking || data.thinking || '' })
+  }
+}
+
+function ChatBar({ tasks, assignments }) {
   const [isOpen, setIsOpen] = useState(true)
   const [draft, setDraft] = useState('')
   const [messages, setMessages] = useState([])
   const [isStreaming, setIsStreaming] = useState(false)
   const [thinkingOpen, setThinkingOpen] = useState(false)
   const scrollRef = useRef(null)
-  const timers = useRef([])
+  const chatControllerRef = useRef(null)
+  const activityTimerRef = useRef(null)
 
-  useEffect(() => () => timers.current.forEach((timer) => window.clearInterval(timer)), [])
+  useEffect(() => () => {
+    chatControllerRef.current?.abort()
+    if (activityTimerRef.current) window.clearInterval(activityTimerRef.current)
+  }, [])
 
   useEffect(() => {
     if (isOpen && scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
   }, [messages, isOpen])
 
   function reset() {
-    timers.current.forEach((timer) => window.clearInterval(timer))
-    timers.current = []
+    chatControllerRef.current?.abort()
+    if (activityTimerRef.current) window.clearInterval(activityTimerRef.current)
     setMessages([])
     setIsStreaming(false)
     setThinkingOpen(false)
   }
 
-  function send(value) {
+  async function send(value) {
     const prompt = value.trim()
     if (!prompt || isStreaming) return
     const assistantId = Date.now()
-    setMessages((current) => [...current, { role: 'user', content: prompt }, { id: assistantId, role: 'assistant', content: '', thinking: '', phase: 'thinking' }])
+    const context = `Dashboard context:\nFocus tasks:\n${JSON.stringify(tasks)}\n\nAssignment queue:\n${JSON.stringify(assignments)}`
+    const history = messages.filter((message) => message.role === 'user' || (message.role === 'assistant' && message.content)).slice(-8).map((message) => ({ role: message.role, content: message.content }))
+    setMessages((current) => [...current, { role: 'user', content: prompt }, { id: assistantId, role: 'assistant', content: '', thinking: '', phase: 'thinking', activity: CHAT_ACTIVITY_LABELS[0] }])
     setDraft('')
     setThinkingOpen(true)
     setIsStreaming(true)
-
-    const thinkingTokens = tokenize(assistantReply.thinking)
-    const answerTokens = tokenize(assistantReply.answer)
-    let cursor = 0
-    const thinkTimer = window.setInterval(() => {
-      cursor += 2
-      setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, thinking: thinkingTokens.slice(0, cursor).join('') } : message))
-      if (cursor >= thinkingTokens.length) {
-        window.clearInterval(thinkTimer)
-        setThinkingOpen(false)
-        setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, phase: 'answering', thoughtSeconds: 1, thinking: assistantReply.thinking } : message))
-        let answerCursor = 0
-        const answerTimer = window.setInterval(() => {
-          answerCursor += 2
-          setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content: answerTokens.slice(0, answerCursor).join('') } : message))
-          if (answerCursor >= answerTokens.length) {
-            window.clearInterval(answerTimer)
-            setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, phase: 'done' } : message))
-            setIsStreaming(false)
-          }
-        }, 18)
-        timers.current.push(answerTimer)
-      }
-    }, 16)
-    timers.current.push(thinkTimer)
+    const controller = new AbortController()
+    chatControllerRef.current = controller
+    let activityIndex = 0
+    activityTimerRef.current = window.setInterval(() => {
+      activityIndex = (activityIndex + 1) % CHAT_ACTIVITY_LABELS.length
+      setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, activity: CHAT_ACTIVITY_LABELS[activityIndex] } : message))
+    }, 1400)
+    try {
+      await streamQwenChat([
+        { role: 'system', content: 'You are Qwen, the local assistant inside the Start dashboard. Be concise, practical, and ground your answer in the dashboard context. Explain your recommendation briefly, and never claim to have taken an action you did not take.' },
+        ...history,
+        { role: 'user', content: `${prompt}\n\n${context}` },
+      ], ({ content, thinking }) => {
+        if (!content && !thinking) return
+        setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, phase: content ? 'answering' : message.phase, content: `${message.content}${content}`, thinking: `${message.thinking}${thinking}` } : message))
+      }, controller.signal)
+      if (!controller.signal.aborted) setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, phase: 'done', thoughtSeconds: Math.max(1, Math.round((Date.now() - assistantId) / 1000)) } : message))
+    } catch (error) {
+      if (!controller.signal.aborted) setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, phase: 'error', activity: 'Qwen unavailable', content: `I couldn’t reach local Qwen. Start Ollama and make sure qwen2.5:7b is installed.\n\n${error.message}` } : message))
+    } finally {
+      if (activityTimerRef.current) window.clearInterval(activityTimerRef.current)
+      activityTimerRef.current = null
+      if (chatControllerRef.current === controller) chatControllerRef.current = null
+      setIsStreaming(false)
+      setThinkingOpen(false)
+    }
   }
 
   function stop() {
-    timers.current.forEach((timer) => window.clearInterval(timer))
-    timers.current = []
+    chatControllerRef.current?.abort()
+    if (activityTimerRef.current) window.clearInterval(activityTimerRef.current)
+    activityTimerRef.current = null
     setIsStreaming(false)
     setThinkingOpen(false)
-    setMessages((current) => current.map((message) => message.phase ? { ...message, phase: 'done' } : message))
+    setMessages((current) => current.map((message) => message.phase === 'thinking' || message.phase === 'answering' ? { ...message, phase: 'done', activity: 'Stopped' } : message))
   }
 
   function submit(event) {
@@ -840,7 +859,7 @@ function ChatBar() {
           <p>It can see your focus list, assignment queue, open pull requests, and today’s forecast. Ask it to triage, plan, or explain anything on screen.</p>
           <div className="assistant-prompts">{suggestedPrompts.map((prompt) => <button key={prompt} type="button" onClick={() => send(prompt)}><span aria-hidden="true">&gt;</span>{prompt}</button>)}</div>
         </div> : messages.map((message, index) => message.role === 'user' ? <div className="assistant-user-message" key={`${message.role}-${index}`}>{message.content}</div> : <div className="assistant-response" key={message.id}>
-          <button type="button" className="assistant-thinking-toggle" onClick={() => setThinkingOpen((value) => !value)} aria-expanded={thinkingOpen}><span aria-hidden="true">›</span>{message.phase === 'thinking' ? 'Thinking…' : `Thought for ${message.thoughtSeconds || 1}s`}</button>
+          <button type="button" className="assistant-thinking-toggle" onClick={() => setThinkingOpen((value) => !value)} aria-expanded={thinkingOpen}><span aria-hidden="true">›</span>{message.phase === 'done' ? `Thought for ${message.thoughtSeconds || 1}s` : message.activity || 'Thinking'}</button>
           {thinkingOpen && message.thinking ? <p className="assistant-thinking-copy">{message.thinking}</p> : null}
           {message.content ? <AssistantMarkdown text={message.content} /> : null}
         </div>)}

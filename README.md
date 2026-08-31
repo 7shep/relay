@@ -21,4 +21,4 @@ The assignments panel uses local Qwen through Ollama to extract assignments, exa
 
 ## Local assistant
 
-The assistant dock targets `qwen2.5:7b` through Ollama at `http://localhost:11434`. It supports text chat and multiple file attachments. Text, Markdown, CSV, and JSON files are included in the request when they are under 200 KB. PDF and office-document extraction is intentionally the next integration step.
+The assistant dock sends real streaming chat requests to local Ollama at `http://localhost:11434` using `qwen2.5:7b`. Start Ollama and pull that model before chatting. Each request includes the current focus tasks and extracted assignment queue, and the sidebar cycles through live activity labels while the response is generating.

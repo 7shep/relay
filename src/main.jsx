@@ -18,6 +18,69 @@ const assignments = [
   { id: 'a5', course: 'MATH-312', title: 'Midterm exam', kind: 'exam', dueInHours: 168, weight: '30%' },
 ]
 
+const FOCUS_STATE_KEY = 'start.focus.state'
+
+function dayKey(date) {
+  return [date.getFullYear(), String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0')].join('-')
+}
+
+function readFocusState(date) {
+  const today = dayKey(date)
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(FOCUS_STATE_KEY))
+    if (!saved || !Array.isArray(saved.tasks)) return { day: today, tasks: seedTasks, shouldDraft: false }
+    if (saved.day === today) return { day: today, tasks: saved.tasks, shouldDraft: false }
+    return { day: today, tasks: saved.tasks.filter((task) => !task.done), shouldDraft: true }
+  } catch {
+    return { day: today, tasks: seedTasks, shouldDraft: false }
+  }
+}
+
+function extractJson(text) {
+  const cleaned = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')
+  const start = cleaned.indexOf('[')
+  const end = cleaned.lastIndexOf(']')
+  if (start >= 0 && end >= start) return JSON.parse(cleaned.slice(start, end + 1))
+  const parsed = JSON.parse(cleaned)
+  return parsed.tasks || []
+}
+
+function normalizeDraftTasks(items) {
+  if (!Array.isArray(items)) return []
+  return items.map((item, index) => ({
+    id: `qwen-${Date.now()}-${index}`,
+    label: String(item?.label || '').trim(),
+    project: String(item?.project || item?.course || 'school').trim(),
+    estimate: String(item?.estimate || '30m').trim(),
+    due: String(item?.due || '').trim(),
+    description: String(item?.description || 'Drafted by Qwen from the upcoming assignment queue.').trim(),
+    timeline: Array.isArray(item?.timeline) ? item.timeline.map((step) => String(step).trim()).filter(Boolean) : [],
+    done: false,
+  })).filter((task) => task.label)
+}
+
+async function draftFocusTasks(today, carriedTasks, signal) {
+  const prompt = `You are Qwen, a local planning assistant. Draft 2 to 4 concrete focus tasks for ${today} from the upcoming assignments and midterms below. Prioritize the closest deadlines and high-weight work. Do not duplicate the carried-over tasks. Return only a JSON array with objects containing exactly: label, project, estimate, due, description, timeline. Use short labels, estimates like "45m" or "2h", ISO dates for due when known, and 2 to 4 timeline steps.\n\nUpcoming assignments:\n${JSON.stringify(assignments)}\n\nCarried-over incomplete tasks:\n${JSON.stringify(carriedTasks)}`
+  const response = await fetch('http://localhost:11434/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal,
+    body: JSON.stringify({
+      model: 'qwen2.5:7b',
+      stream: false,
+      format: 'json',
+      messages: [
+        { role: 'system', content: 'You create concise, actionable study and work plans. Output valid JSON only.' },
+        { role: 'user', content: prompt },
+      ],
+    }),
+  })
+  if (!response.ok) throw new Error(`Qwen returned ${response.status}`)
+  const data = await response.json()
+  const content = data.message?.content || data.response || ''
+  return normalizeDraftTasks(extractJson(content))
+}
+
 const fallbackWeather = {
   location: 'Current location',
   temp: 20,
@@ -212,16 +275,64 @@ async function loadWeather(latitude, longitude, signal) {
 
 function App() {
   const [now, setNow] = useState(() => new Date())
-  const [tasks, setTasks] = useState(seedTasks)
+  const [focusState] = useState(() => readFocusState(new Date()))
+  const [tasks, setTasks] = useState(() => focusState.tasks)
+  const [focusDay, setFocusDay] = useState(() => focusState.day)
+  const [focusStatus, setFocusStatus] = useState(() => focusState.shouldDraft ? 'planning' : 'ready')
   const [showCompleted, setShowCompleted] = useState(true)
   const [selectedTask, setSelectedTask] = useState(null)
   const [weather, setWeather] = useState(fallbackWeather)
   const [weatherStatus, setWeatherStatus] = useState('locating')
+  const tasksRef = useRef(tasks)
+  const lastFocusDayRef = useRef(focusState.day)
+  const draftControllerRef = useRef(null)
 
   useEffect(() => {
     const interval = window.setInterval(() => setNow(new Date()), 1000)
     return () => window.clearInterval(interval)
   }, [])
+
+  const runFocusDraft = useCallback(async (day, carriedTasks) => {
+    draftControllerRef.current?.abort()
+    const controller = new AbortController()
+    draftControllerRef.current = controller
+    setFocusStatus('planning')
+
+    try {
+      const draftedTasks = await draftFocusTasks(day, carriedTasks, controller.signal)
+      if (controller.signal.aborted || lastFocusDayRef.current !== day) return
+      setTasks((current) => [...current, ...draftedTasks])
+      setFocusStatus(draftedTasks.length ? 'ready' : 'offline')
+    } catch (error) {
+      if (!controller.signal.aborted && lastFocusDayRef.current === day) setFocusStatus('offline')
+    }
+  }, [])
+
+  useEffect(() => {
+    tasksRef.current = tasks
+    try {
+      window.localStorage.setItem(FOCUS_STATE_KEY, JSON.stringify({ day: focusDay, tasks }))
+    } catch {
+      // The focus list still works when browser storage is unavailable.
+    }
+  }, [tasks, focusDay])
+
+  useEffect(() => {
+    if (focusState.shouldDraft) runFocusDraft(focusState.day, tasksRef.current)
+    return () => draftControllerRef.current?.abort()
+  }, [focusState, runFocusDraft])
+
+  useEffect(() => {
+    const today = dayKey(now)
+    if (today === lastFocusDayRef.current) return
+
+    lastFocusDayRef.current = today
+    const carriedTasks = tasksRef.current.filter((task) => !task.done)
+    setFocusDay(today)
+    setTasks(carriedTasks)
+    setSelectedTask((current) => current && current.done ? null : current)
+    runFocusDraft(today, carriedTasks)
+  }, [now, runFocusDraft])
 
   useEffect(() => {
     if (!selectedTask) return undefined
@@ -302,6 +413,7 @@ function App() {
             onOpen={setSelectedTask}
             showCompleted={showCompleted}
             onToggleCompleted={() => setShowCompleted((current) => !current)}
+            focusStatus={focusStatus}
             index={0}
           />
 
@@ -352,10 +464,11 @@ function Panel({ path, meta, children, primary = false, index = 0, className = '
   )
 }
 
-function FocusTasks({ tasks, onAdd, onOpen, showCompleted, onToggleCompleted, index }) {
+function FocusTasks({ tasks, onAdd, onOpen, showCompleted, onToggleCompleted, focusStatus, index }) {
   const completed = tasks.filter((task) => task.done).length
   const visible = showCompleted ? tasks : tasks.filter((task) => !task.done)
   const progress = tasks.length === 0 ? 0 : Math.round((completed / tasks.length) * 100)
+  const syncLabel = focusStatus === 'planning' ? 'Qwen drafting...' : focusStatus === 'offline' ? 'Qwen unavailable' : ''
 
   function submit(event) {
     event.preventDefault()
@@ -367,7 +480,7 @@ function FocusTasks({ tasks, onAdd, onOpen, showCompleted, onToggleCompleted, in
   }
 
   return (
-    <Panel path="~/focus/today.md" primary index={index} className="focus-panel" meta={<button className="panel-meta-button" onClick={onToggleCompleted}>{completed}/{tasks.length} done</button>}>
+    <Panel path="~/focus/today.md" primary index={index} className="focus-panel" meta={<span className="focus-meta"><button className="panel-meta-button" onClick={onToggleCompleted}>{completed}/{tasks.length} done</button>{syncLabel && <span className={`focus-sync-status ${focusStatus}`}> · {syncLabel}</span>}</span>}>
       <div className="progress-row"><div className="progress-track"><span style={{ width: `${progress}%` }} /></div><span>{progress}%</span></div>
       <ul className="focus-list">
         {visible.map((task, position) => {
@@ -578,7 +691,7 @@ function ChatBar() {
   return <aside className={`assistant-dock ${isOpen ? 'is-open' : 'is-collapsed'}`} aria-label="Assistant sidebar">
     {isOpen ? <>
       <header className="assistant-header">
-        <h2><span className="assistant-spark" aria-hidden="true">✣</span><span>~/assistant</span><span className="assistant-model">gpt-5-mini</span></h2>
+        <h2><span className="assistant-spark" aria-hidden="true">✣</span><span>~/assistant</span><span className="assistant-model">qwen-2.5-7b</span></h2>
         <div className="assistant-actions">
           <button type="button" className="assistant-icon-button" onClick={reset} aria-label="New conversation" title="New conversation">↻</button>
           <button type="button" className="assistant-icon-button" onClick={() => setIsOpen(false)} aria-label="Collapse assistant" title="Collapse assistant">⇥</button>

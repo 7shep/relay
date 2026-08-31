@@ -15,9 +15,9 @@ The first pass is intentionally browser-based and follows the terminal-style das
 
 The GitHub panel asks for your GitHub username the first time it loads. Public repositories work without a token. Add a read-only GitHub Personal Access Token if you want private repositories or a higher API limit. The current browser MVP stores those values in local storage; the Tauri version can move the token into the Windows keychain.
 
-## Google Calendar setup
+## Assignments
 
-The assignments panel can import upcoming Google Calendar events whose titles mention assignment, midterm, exam, quiz, test, project, paper, lab, homework, presentation, or report. Click `connect Google Calendar`, create a Google Cloud Web application OAuth client ID, enable the Google Calendar API, and add the local Vite origin (for example `http://localhost:5173`) to its authorized JavaScript origins. The client ID is stored locally; OAuth access tokens stay in memory and are not persisted.
+The assignments panel uses local Qwen through Ollama to extract assignments, exams, labs, projects, and due dates from syllabus text. Click `add syllabus` and select `.txt`, `.md`, `.csv`, `.json`, or `.html` files up to 500 KB each. Extracted assignments are normalized and stored in browser local storage so Qwen can use them when drafting the daily focus list.
 
 ## Local assistant
 

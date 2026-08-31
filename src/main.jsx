@@ -12,12 +12,6 @@ const seedTasks = [
 
 const FOCUS_STATE_KEY = 'start.focus.state'
 const ASSIGNMENTS_STATE_KEY = 'start.assignments'
-const GOOGLE_CALENDAR_CONFIG_KEY = 'start.google-calendar.config'
-const GOOGLE_CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar.readonly'
-const GOOGLE_IDENTITY_SCRIPT = 'https://accounts.google.com/gsi/client'
-const SCHOOLWORK_PATTERN = /assignment|midterm|exam|quiz|test|project|paper|essay|lab|homework|presentation|report/i
-
-let googleIdentityServicesPromise
 
 function dayKey(date) {
   return [date.getFullYear(), String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0')].join('-')
@@ -47,121 +41,74 @@ function readAssignments() {
       dueInHours: item?.dueInHours !== undefined && item?.dueInHours !== null && item?.dueInHours !== '' && Number.isFinite(Number(item.dueInHours)) ? Number(item.dueInHours) : null,
       dueAt: String(item?.dueAt || '').trim(),
       weight: String(item?.weight || '').trim(),
-    })).filter((item) => item.title)
+      source: String(item?.source || '').trim(),
+    })).filter((item) => item.title && !item.id.startsWith('google-'))
   } catch {
     return []
   }
 }
 
-function readGoogleCalendarConfig() {
-  try {
-    const saved = JSON.parse(window.localStorage.getItem(GOOGLE_CALENDAR_CONFIG_KEY))
-    return { clientId: String(saved?.clientId || '').trim() }
-  } catch {
-    return { clientId: '' }
-  }
-}
-
-function loadGoogleIdentityServices() {
-  if (window.google?.accounts?.oauth2) return Promise.resolve()
-  if (googleIdentityServicesPromise) return googleIdentityServicesPromise
-  googleIdentityServicesPromise = new Promise((resolve, reject) => {
-    const existing = document.querySelector(`script[src="${GOOGLE_IDENTITY_SCRIPT}"]`)
-    if (existing) {
-      existing.addEventListener('load', resolve, { once: true })
-      existing.addEventListener('error', () => reject(new Error('Google sign-in could not load.')), { once: true })
-      return
-    }
-    const script = document.createElement('script')
-    script.src = GOOGLE_IDENTITY_SCRIPT
-    script.async = true
-    script.onload = resolve
-    script.onerror = () => reject(new Error('Google sign-in could not load.'))
-    document.head.appendChild(script)
-  })
-  return googleIdentityServicesPromise
-}
-
-async function requestGoogleAccessToken(clientId) {
-  await loadGoogleIdentityServices()
-  return new Promise((resolve, reject) => {
-    const client = window.google.accounts.oauth2.initTokenClient({
-      client_id: clientId,
-      scope: GOOGLE_CALENDAR_SCOPE,
-      callback: (response) => {
-        if (response.error) reject(new Error(response.error_description || 'Google Calendar authorization failed.'))
-        else resolve(response.access_token)
-      },
-      error_callback: () => reject(new Error('Google Calendar authorization was cancelled.')),
-    })
-    client.requestAccessToken()
-  })
-}
-
-async function googleCalendarJson(url, accessToken) {
-  const response = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } })
-  if (!response.ok) {
-    if (response.status === 401) throw new Error('Google Calendar authorization expired. Connect again to refresh it.')
-    throw new Error(`Google Calendar returned ${response.status}.`)
-  }
-  return response.json()
-}
-
-function eventStart(event) {
-  return event.start?.dateTime || event.start?.date || ''
-}
-
-function formatCalendarDue(event, start) {
-  if (event.start?.date) {
-    return new Intl.DateTimeFormat('en-CA', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${start}T00:00:00Z`)).toLowerCase()
-  }
-  return new Intl.DateTimeFormat('en-CA', { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(start)).toLowerCase()
-}
-
-function normalizeCalendarEvent(event, calendar, now) {
-  const start = eventStart(event)
-  const dueDate = event.start?.date ? new Date(`${start}T00:00:00Z`) : new Date(start)
-  if (!start || Number.isNaN(dueDate.getTime())) return null
-  const title = String(event.summary || '').trim()
-  if (!title || !SCHOOLWORK_PATTERN.test(title)) return null
-  const dueInHours = Math.max(0, Math.round((dueDate.getTime() - now.getTime()) / 3600000))
-  const kind = /midterm|exam|quiz|test/i.test(title) ? 'exam' : 'assignment'
-  return {
-    id: `google-${calendar.id}-${event.id}`,
-    course: calendar.summary || 'Google Calendar',
-    title,
-    kind,
-    dueInHours,
-    dueAt: formatCalendarDue(event, start),
-    weight: '',
-  }
-}
-
-async function loadGoogleCalendarAssignments(accessToken, now) {
-  const calendarData = await googleCalendarJson('https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=100', accessToken)
-  const timeMin = now.toISOString()
-  const timeMax = new Date(now.getTime() + 45 * 24 * 3600000).toISOString()
-  const calendars = calendarData.items || []
-  const eventPages = await Promise.all(calendars.map((calendar) => {
-    const params = new URLSearchParams({
-      singleEvents: 'true',
-      orderBy: 'startTime',
-      timeMin,
-      timeMax,
-      maxResults: '100',
-    })
-    return googleCalendarJson(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendar.id)}/events?${params}`, accessToken)
-      .then((data) => (data.items || []).map((event) => normalizeCalendarEvent(event, calendar, now)).filter(Boolean))
-  }))
-  return eventPages.flat().sort((a, b) => a.dueInHours - b.dueInHours)
-}
 function extractJson(text) {
   const cleaned = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')
   const start = cleaned.indexOf('[')
   const end = cleaned.lastIndexOf(']')
   if (start >= 0 && end >= start) return JSON.parse(cleaned.slice(start, end + 1))
   const parsed = JSON.parse(cleaned)
-  return parsed.tasks || []
+  return parsed.assignments || parsed.tasks || []
+}
+
+function formatSyllabusDue(value) {
+  const date = String(value || '').trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return ''
+  return new Intl.DateTimeFormat('en-CA', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(`${date}T12:00:00`)).toLowerCase()
+}
+
+function normalizeSyllabusAssignments(items, now, sourceNames) {
+  if (!Array.isArray(items)) return []
+  return items.map((item, index) => {
+    const title = String(item?.title || item?.label || '').trim()
+    const course = String(item?.course || '').trim()
+    const dueAt = String(item?.dueAt || item?.due || '').trim().slice(0, 10)
+    const dueDate = /^\d{4}-\d{2}-\d{2}$/.test(dueAt) ? new Date(`${dueAt}T23:59:00`) : null
+    const dueInHours = dueDate && !Number.isNaN(dueDate.getTime()) ? Math.max(0, Math.round((dueDate.getTime() - now.getTime()) / 3600000)) : null
+    return {
+      id: `syllabus-${index}-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 48)}`,
+      course,
+      title,
+      kind: String(item?.kind || (/midterm|exam|quiz|test/i.test(title) ? 'exam' : 'assignment')).trim(),
+      dueInHours,
+      dueAt: formatSyllabusDue(dueAt),
+      weight: String(item?.weight || '').trim(),
+      source: sourceNames.join(', '),
+    }
+  }).filter((item) => item.title)
+}
+
+async function draftAssignmentsFromSyllabi(sources, now, signal) {
+  const prompt = `You are Qwen, a local academic planning assistant. Extract every upcoming assignment, project, paper, lab, quiz, exam, midterm, presentation, or report from these syllabi. Do not invent work that is not in the source. Return only a JSON object with an assignments array. Each assignment must contain exactly: title, course, kind, dueAt, weight. Use ISO dates (YYYY-MM-DD) for dueAt when a date is stated; otherwise use an empty string. Preserve the course name and grading weight when available.
+
+Current date: ${dayKey(now)}
+
+Syllabi:
+${sources.map((source) => `--- ${source.name} ---\n${source.text}`).join('\n\n')}`
+  const response = await fetch('http://localhost:11434/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal,
+    body: JSON.stringify({
+      model: 'qwen2.5:7b',
+      stream: false,
+      format: 'json',
+      messages: [
+        { role: 'system', content: 'Extract only assignments explicitly present in the supplied syllabi. Output valid JSON only.' },
+        { role: 'user', content: prompt },
+      ],
+    }),
+  })
+  if (!response.ok) throw new Error(`Qwen returned ${response.status}`)
+  const data = await response.json()
+  const content = data.message?.content || data.response || ''
+  return normalizeSyllabusAssignments(extractJson(content), now, sources.map((source) => source.name))
 }
 
 function normalizeDraftTasks(items) {
@@ -178,7 +125,7 @@ function normalizeDraftTasks(items) {
   })).filter((task) => task.label)
 }
 
-async function draftFocusTasks(today, carriedTasks, signal) {
+async function draftFocusTasks(today, carriedTasks, assignments, signal) {
   const prompt = `You are Qwen, a local planning assistant. Draft 2 to 4 concrete focus tasks for ${today} from the upcoming assignments and midterms below. Prioritize the closest deadlines and high-weight work. Do not duplicate the carried-over tasks. Return only a JSON array with objects containing exactly: label, project, estimate, due, description, timeline. Use short labels, estimates like "45m" or "2h", ISO dates for due when known, and 2 to 4 timeline steps.\n\nUpcoming assignments:\n${JSON.stringify(assignments)}\n\nCarried-over incomplete tasks:\n${JSON.stringify(carriedTasks)}`
   const response = await fetch('http://localhost:11434/api/chat', {
     method: 'POST',
@@ -399,8 +346,7 @@ function App() {
   const [focusDay, setFocusDay] = useState(() => focusState.day)
   const [focusStatus, setFocusStatus] = useState(() => focusState.shouldDraft ? 'planning' : 'ready')
   const [assignments, setAssignments] = useState(readAssignments)
-  const [calendarConfig, setCalendarConfig] = useState(readGoogleCalendarConfig)
-  const [calendarState, setCalendarState] = useState({ status: 'idle', error: '' })
+  const [syllabusState, setSyllabusState] = useState({ status: 'idle', error: '' })
   const [showCompleted, setShowCompleted] = useState(true)
   const [selectedTask, setSelectedTask] = useState(null)
   const [weather, setWeather] = useState(fallbackWeather)
@@ -409,6 +355,7 @@ function App() {
   const assignmentsRef = useRef(assignments)
   const lastFocusDayRef = useRef(focusState.day)
   const draftControllerRef = useRef(null)
+  const syllabusControllerRef = useRef(null)
 
   useEffect(() => {
     const interval = window.setInterval(() => setNow(new Date()), 1000)
@@ -470,29 +417,41 @@ function App() {
     runFocusDraft(today, carriedTasks)
   }, [now, runFocusDraft])
 
-  const connectGoogleCalendar = useCallback(async (clientId) => {
-    const normalizedClientId = clientId.trim()
-    if (!normalizedClientId) return
-    setCalendarState({ status: 'connecting', error: '' })
+  const importSyllabi = useCallback(async (files) => {
+    if (!files.length) return
+    syllabusControllerRef.current?.abort()
+    const controller = new AbortController()
+    syllabusControllerRef.current = controller
+    setSyllabusState({ status: 'importing', error: '' })
     try {
-      const accessToken = await requestGoogleAccessToken(normalizedClientId)
-      const importedAssignments = await loadGoogleCalendarAssignments(accessToken, now)
-      const nextConfig = { clientId: normalizedClientId }
-      window.localStorage.setItem(GOOGLE_CALENDAR_CONFIG_KEY, JSON.stringify(nextConfig))
-      setCalendarConfig(nextConfig)
-      setAssignments(importedAssignments)
-      setCalendarState({ status: 'connected', error: '' })
+      const sources = await Promise.all(files.map(async (file) => {
+        if (file.size > 500 * 1024) throw new Error(`${file.name} is larger than 500 KB.`)
+        if (!/\.(txt|md|csv|json|html?)$/i.test(file.name)) throw new Error(`${file.name} is not a supported text syllabus. Export it as .txt, .md, .csv, .json, or .html.`)
+        return { name: file.name, text: await file.text() }
+      }))
+      const importedAssignments = await draftAssignmentsFromSyllabi(sources, now, controller.signal)
+      if (controller.signal.aborted) return
+      setAssignments((current) => {
+        const next = [...current]
+        importedAssignments.forEach((item) => {
+          const duplicate = next.find((existing) => existing.title.toLowerCase() === item.title.toLowerCase() && existing.course.toLowerCase() === item.course.toLowerCase())
+          if (duplicate) Object.assign(duplicate, item)
+          else next.push(item)
+        })
+        return next.sort((a, b) => (a.dueInHours ?? Number.MAX_SAFE_INTEGER) - (b.dueInHours ?? Number.MAX_SAFE_INTEGER))
+      })
+      setSyllabusState({ status: importedAssignments.length ? 'ready' : 'empty', error: '' })
     } catch (error) {
-      if (error.name !== 'AbortError') setCalendarState({ status: 'error', error: error.message })
+      if (!controller.signal.aborted && error.name !== 'AbortError') setSyllabusState({ status: 'error', error: error.message })
     }
   }, [now])
 
-  const disconnectGoogleCalendar = useCallback(() => {
-    window.localStorage.removeItem(GOOGLE_CALENDAR_CONFIG_KEY)
+  useEffect(() => () => syllabusControllerRef.current?.abort(), [])
+
+  const clearAssignments = useCallback(() => {
     window.localStorage.removeItem(ASSIGNMENTS_STATE_KEY)
-    setCalendarConfig({ clientId: '' })
     setAssignments([])
-    setCalendarState({ status: 'idle', error: '' })
+    setSyllabusState({ status: 'idle', error: '' })
   }, [])
 
   useEffect(() => {
@@ -580,7 +539,7 @@ function App() {
 
           <div className="side-stack">
             <WeatherPanel index={1} weather={weather} weatherStatus={weatherStatus} />
-            <AssignmentsPanel now={now} assignments={assignments} index={2} calendarState={calendarState} clientId={calendarConfig.clientId} onConnect={connectGoogleCalendar} onDisconnect={disconnectGoogleCalendar} />
+            <AssignmentsPanel now={now} assignments={assignments} index={2} syllabusState={syllabusState} onImport={importSyllabi} onClear={clearAssignments} />
           </div>
 
           <PullRequestsPanel index={3} />
@@ -897,7 +856,6 @@ function LegacyAssignmentsPanel({ now, index }) {
   const soon = assignments.filter((item) => item.dueInHours <= 24).length
   return <Panel path="~/edu/assignments" index={index} className="assignments-panel" meta={<span>{assignments.length} queued <b className="danger-text">· {soon} due &lt;24h</b></span>}>
     <ol className="assignment-list"><span className="assignment-line" aria-hidden="true" />{assignments.map((item) => <li key={item.id}><span className={`assignment-dot ${item.dueInHours <= 12 ? 'danger-dot' : item.dueInHours <= 48 ? 'warn-dot' : ''}`} aria-hidden="true" /><div><div className="assignment-title"><strong>{item.title}</strong><span className={item.dueInHours <= 12 ? 'danger-text' : item.dueInHours <= 48 ? 'warn-text' : ''}>{dueLabel(item.dueInHours)}</span></div><small>{item.course} · {item.kind} · {item.weight} of grade · due {dueClock(item.dueInHours, now)}</small></div></li>)}</ol>
-*/
 function AssignmentsPanel({ now, assignments, index, calendarState, clientId, onConnect, onDisconnect }) {
   const soon = assignments.filter((item) => Number.isFinite(item.dueInHours) && item.dueInHours <= 24).length
   const meta = assignments.length ? <span>{assignments.length} queued <b className="danger-text">· {soon} due &lt;24h</b></span> : calendarState.status === 'connected' ? <span>google calendar · 0 matches</span> : null
@@ -938,6 +896,34 @@ function GoogleCalendarSetup({ clientId, state, onConnect, onDisconnect }) {
 
 function CalendarClientIdForm({ value, onChange, onSubmit }) {
   return <form className="calendar-setup" onSubmit={onSubmit}><label><span>Google OAuth client ID</span><input value={value} onChange={(event) => onChange(event.target.value)} placeholder="123...apps.googleusercontent.com" autoComplete="off" required /></label><button type="submit" className="calendar-connect">connect Google Calendar <span aria-hidden="true">↗</span></button><small>Use a Web application client ID with this app&apos;s local URL as an authorized origin.</small><a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noreferrer">create a client ID in Google Cloud ↗</a></form>
+}
+
+*/
+
+function AssignmentsPanel({ now, assignments, index, syllabusState, onImport, onClear }) {
+  const soon = assignments.filter((item) => Number.isFinite(item.dueInHours) && item.dueInHours <= 24).length
+  const meta = assignments.length ? <span>{assignments.length} queued <b className="danger-text">· {soon} due &lt;24h</b></span> : syllabusState.status === 'importing' ? <span>qwen extracting...</span> : null
+  return <Panel path="~/edu/assignments" index={index} className="assignments-panel" meta={meta}>
+    {assignments.length ? <><div className="assignment-toolbar"><span>source: syllabi · qwen-2.5-7b</span><SyllabusImportButton onImport={onImport} /><button type="button" className="assignment-action" onClick={onClear}>clear</button></div><ol className="assignment-list"><span className="assignment-line" aria-hidden="true" />{assignments.map((item) => {
+      const dueHours = Number.isFinite(item.dueInHours) ? item.dueInHours : null
+      const dueText = item.dueAt || (dueHours === null ? 'date not set' : dueClock(dueHours, now))
+      return <li key={item.id}><span className={`assignment-dot ${dueHours !== null && dueHours <= 12 ? 'danger-dot' : dueHours !== null && dueHours <= 48 ? 'warn-dot' : ''}`} aria-hidden="true" /><div><div className="assignment-title"><strong>{item.title}</strong><span className={dueHours !== null && dueHours <= 12 ? 'danger-text' : dueHours !== null && dueHours <= 48 ? 'warn-text' : ''}>{dueHours === null ? '—' : dueLabel(dueHours)}</span></div><small>{[item.course, item.kind, item.weight && `${item.weight} of grade`, `due ${dueText}`].filter(Boolean).join(' · ')}</small></div></li>
+    })}</ol></> : <SyllabusSetup state={syllabusState} onImport={onImport} />}
+  </Panel>
+}
+
+function SyllabusSetup({ state, onImport }) {
+  if (state.status === 'importing') return <div className="assignment-empty"><strong>Qwen is reading your syllabi...</strong><small>Extracting dated assignments, exams, labs, and projects locally.</small></div>
+  return <div className={`assignment-empty ${state.status === 'error' ? 'assignment-error' : ''}`}><strong>{state.status === 'empty' ? 'No assignments found.' : 'Add your syllabi.'}</strong><small>{state.status === 'error' ? state.error : 'Qwen will extract assignments and midterms from text-based syllabus files.'}</small><SyllabusImportButton onImport={onImport} /><small>Supported: .txt, .md, .csv, .json, and .html files up to 500 KB each.</small></div>
+}
+
+function SyllabusImportButton({ onImport }) {
+  const inputRef = useRef(null)
+  function chooseFiles(event) {
+    onImport(Array.from(event.target.files || []))
+    event.target.value = ''
+  }
+  return <><input ref={inputRef} className="visually-hidden" type="file" accept=".txt,.md,.csv,.json,.html,.htm,text/plain,text/markdown,text/csv,application/json,text/html" multiple onChange={chooseFiles} /><button type="button" className="syllabus-connect" onClick={() => inputRef.current?.click()}>add syllabus <span aria-hidden="true">↗</span></button></>
 }
 
 function PullRequestsPanel({ index }) {

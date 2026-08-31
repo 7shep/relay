@@ -1,6 +1,10 @@
 import React, { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
+import * as pdfjsLib from 'pdfjs-dist'
+import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import './styles.css'
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker
 
 const seedTasks = [
   { id: 't1', label: 'Ship auth refresh-token rotation', project: 'orbit-api', estimate: '2h', due: '2026-09-02', description: 'Rotate refresh tokens on every exchange and keep the existing session invalidation path intact.', timeline: ['Review the current token exchange flow', 'Implement rotation and persistence', 'Add coverage for reuse and expiry', 'Open the PR and request review'], done: false },
@@ -12,12 +16,6 @@ const seedTasks = [
 
 const FOCUS_STATE_KEY = 'start.focus.state'
 const ASSIGNMENTS_STATE_KEY = 'start.assignments'
-const GOOGLE_CALENDAR_CONFIG_KEY = 'start.google-calendar.config'
-const GOOGLE_CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar.readonly'
-const GOOGLE_IDENTITY_SCRIPT = 'https://accounts.google.com/gsi/client'
-const SCHOOLWORK_PATTERN = /assignment|midterm|exam|quiz|test|project|paper|essay|lab|homework|presentation|report/i
-
-let googleIdentityServicesPromise
 
 function dayKey(date) {
   return [date.getFullYear(), String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0')].join('-')
@@ -47,121 +45,88 @@ function readAssignments() {
       dueInHours: item?.dueInHours !== undefined && item?.dueInHours !== null && item?.dueInHours !== '' && Number.isFinite(Number(item.dueInHours)) ? Number(item.dueInHours) : null,
       dueAt: String(item?.dueAt || '').trim(),
       weight: String(item?.weight || '').trim(),
-    })).filter((item) => item.title)
+      source: String(item?.source || '').trim(),
+    })).filter((item) => item.title && !item.id.startsWith('google-'))
   } catch {
     return []
   }
 }
 
-function readGoogleCalendarConfig() {
-  try {
-    const saved = JSON.parse(window.localStorage.getItem(GOOGLE_CALENDAR_CONFIG_KEY))
-    return { clientId: String(saved?.clientId || '').trim() }
-  } catch {
-    return { clientId: '' }
-  }
-}
-
-function loadGoogleIdentityServices() {
-  if (window.google?.accounts?.oauth2) return Promise.resolve()
-  if (googleIdentityServicesPromise) return googleIdentityServicesPromise
-  googleIdentityServicesPromise = new Promise((resolve, reject) => {
-    const existing = document.querySelector(`script[src="${GOOGLE_IDENTITY_SCRIPT}"]`)
-    if (existing) {
-      existing.addEventListener('load', resolve, { once: true })
-      existing.addEventListener('error', () => reject(new Error('Google sign-in could not load.')), { once: true })
-      return
-    }
-    const script = document.createElement('script')
-    script.src = GOOGLE_IDENTITY_SCRIPT
-    script.async = true
-    script.onload = resolve
-    script.onerror = () => reject(new Error('Google sign-in could not load.'))
-    document.head.appendChild(script)
-  })
-  return googleIdentityServicesPromise
-}
-
-async function requestGoogleAccessToken(clientId) {
-  await loadGoogleIdentityServices()
-  return new Promise((resolve, reject) => {
-    const client = window.google.accounts.oauth2.initTokenClient({
-      client_id: clientId,
-      scope: GOOGLE_CALENDAR_SCOPE,
-      callback: (response) => {
-        if (response.error) reject(new Error(response.error_description || 'Google Calendar authorization failed.'))
-        else resolve(response.access_token)
-      },
-      error_callback: () => reject(new Error('Google Calendar authorization was cancelled.')),
-    })
-    client.requestAccessToken()
-  })
-}
-
-async function googleCalendarJson(url, accessToken) {
-  const response = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } })
-  if (!response.ok) {
-    if (response.status === 401) throw new Error('Google Calendar authorization expired. Connect again to refresh it.')
-    throw new Error(`Google Calendar returned ${response.status}.`)
-  }
-  return response.json()
-}
-
-function eventStart(event) {
-  return event.start?.dateTime || event.start?.date || ''
-}
-
-function formatCalendarDue(event, start) {
-  if (event.start?.date) {
-    return new Intl.DateTimeFormat('en-CA', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${start}T00:00:00Z`)).toLowerCase()
-  }
-  return new Intl.DateTimeFormat('en-CA', { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(start)).toLowerCase()
-}
-
-function normalizeCalendarEvent(event, calendar, now) {
-  const start = eventStart(event)
-  const dueDate = event.start?.date ? new Date(`${start}T00:00:00Z`) : new Date(start)
-  if (!start || Number.isNaN(dueDate.getTime())) return null
-  const title = String(event.summary || '').trim()
-  if (!title || !SCHOOLWORK_PATTERN.test(title)) return null
-  const dueInHours = Math.max(0, Math.round((dueDate.getTime() - now.getTime()) / 3600000))
-  const kind = /midterm|exam|quiz|test/i.test(title) ? 'exam' : 'assignment'
-  return {
-    id: `google-${calendar.id}-${event.id}`,
-    course: calendar.summary || 'Google Calendar',
-    title,
-    kind,
-    dueInHours,
-    dueAt: formatCalendarDue(event, start),
-    weight: '',
-  }
-}
-
-async function loadGoogleCalendarAssignments(accessToken, now) {
-  const calendarData = await googleCalendarJson('https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=100', accessToken)
-  const timeMin = now.toISOString()
-  const timeMax = new Date(now.getTime() + 45 * 24 * 3600000).toISOString()
-  const calendars = calendarData.items || []
-  const eventPages = await Promise.all(calendars.map((calendar) => {
-    const params = new URLSearchParams({
-      singleEvents: 'true',
-      orderBy: 'startTime',
-      timeMin,
-      timeMax,
-      maxResults: '100',
-    })
-    return googleCalendarJson(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendar.id)}/events?${params}`, accessToken)
-      .then((data) => (data.items || []).map((event) => normalizeCalendarEvent(event, calendar, now)).filter(Boolean))
-  }))
-  return eventPages.flat().sort((a, b) => a.dueInHours - b.dueInHours)
-}
 function extractJson(text) {
   const cleaned = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')
   const start = cleaned.indexOf('[')
   const end = cleaned.lastIndexOf(']')
   if (start >= 0 && end >= start) return JSON.parse(cleaned.slice(start, end + 1))
   const parsed = JSON.parse(cleaned)
-  return parsed.tasks || []
+  return parsed.assignments || parsed.tasks || []
+}
+
+function formatSyllabusDue(value) {
+  const date = String(value || '').trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return ''
+  return new Intl.DateTimeFormat('en-CA', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(`${date}T12:00:00`)).toLowerCase()
+}
+
+function normalizeSyllabusAssignments(items, now, sourceNames) {
+  if (!Array.isArray(items)) return []
+  return items.map((item, index) => {
+    const title = String(item?.title || item?.label || '').trim()
+    const course = String(item?.course || '').trim()
+    const dueAt = String(item?.dueAt || item?.due || '').trim().slice(0, 10)
+    const dueDate = /^\d{4}-\d{2}-\d{2}$/.test(dueAt) ? new Date(`${dueAt}T23:59:00`) : null
+    const dueInHours = dueDate && !Number.isNaN(dueDate.getTime()) ? Math.max(0, Math.round((dueDate.getTime() - now.getTime()) / 3600000)) : null
+    return {
+      id: `syllabus-${index}-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 48)}`,
+      course,
+      title,
+      kind: String(item?.kind || (/midterm|exam|quiz|test/i.test(title) ? 'exam' : 'assignment')).trim(),
+      dueInHours,
+      dueAt: formatSyllabusDue(dueAt),
+      weight: String(item?.weight || '').trim(),
+      source: sourceNames.join(', '),
+    }
+  }).filter((item) => item.title)
+}
+
+async function draftAssignmentsFromSyllabi(sources, now, signal) {
+  const prompt = `You are Qwen, a local academic planning assistant. Extract every upcoming assignment, project, paper, lab, quiz, exam, midterm, presentation, or report from these syllabi. Do not invent work that is not in the source. Return only a JSON object with an assignments array. Each assignment must contain exactly: title, course, kind, dueAt, weight. Use ISO dates (YYYY-MM-DD) for dueAt when a date is stated; otherwise use an empty string. Preserve the course name and grading weight when available.
+
+Current date: ${dayKey(now)}
+
+Syllabi:
+${sources.map((source) => `--- ${source.name} ---\n${source.text}`).join('\n\n')}`
+  const response = await fetch('http://localhost:11434/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal,
+    body: JSON.stringify({
+      model: 'qwen2.5:7b',
+      stream: false,
+      format: 'json',
+      messages: [
+        { role: 'system', content: 'Extract only assignments explicitly present in the supplied syllabi. Output valid JSON only.' },
+        { role: 'user', content: prompt },
+      ],
+    }),
+  })
+  if (!response.ok) throw new Error(`Qwen returned ${response.status}`)
+  const data = await response.json()
+  const content = data.message?.content || data.response || ''
+  return normalizeSyllabusAssignments(extractJson(content), now, sources.map((source) => source.name))
+}
+
+async function readSyllabusFile(file) {
+  if (!/\.pdf$/i.test(file.name)) return { name: file.name, text: await file.text() }
+  const document = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise
+  const pages = []
+  for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
+    const page = await document.getPage(pageNumber)
+    const content = await page.getTextContent()
+    pages.push(content.items.map((item) => item.str).join(' '))
+  }
+  const text = pages.join('\n\n').trim()
+  if (!text) throw new Error(`${file.name} has no selectable text. Scanned PDFs need OCR before import.`)
+  return { name: file.name, text }
 }
 
 function normalizeDraftTasks(items) {
@@ -178,7 +143,7 @@ function normalizeDraftTasks(items) {
   })).filter((task) => task.label)
 }
 
-async function draftFocusTasks(today, carriedTasks, signal) {
+async function draftFocusTasks(today, carriedTasks, assignments, signal) {
   const prompt = `You are Qwen, a local planning assistant. Draft 2 to 4 concrete focus tasks for ${today} from the upcoming assignments and midterms below. Prioritize the closest deadlines and high-weight work. Do not duplicate the carried-over tasks. Return only a JSON array with objects containing exactly: label, project, estimate, due, description, timeline. Use short labels, estimates like "45m" or "2h", ISO dates for due when known, and 2 to 4 timeline steps.\n\nUpcoming assignments:\n${JSON.stringify(assignments)}\n\nCarried-over incomplete tasks:\n${JSON.stringify(carriedTasks)}`
   const response = await fetch('http://localhost:11434/api/chat', {
     method: 'POST',
@@ -191,6 +156,38 @@ async function draftFocusTasks(today, carriedTasks, signal) {
       messages: [
         { role: 'system', content: 'You create concise, actionable study and work plans. Output valid JSON only.' },
         { role: 'user', content: prompt },
+      ],
+    }),
+  })
+  if (!response.ok) throw new Error(`Qwen returned ${response.status}`)
+  const data = await response.json()
+  const content = data.message?.content || data.response || ''
+  return normalizeDraftTasks(extractJson(content))
+}
+
+async function draftTasksFromPrompt(prompt, currentTasks, assignments, signal) {
+  const today = dayKey(new Date())
+  const request = `You are Qwen, a local task-planning assistant. Turn the user's request into one to three concrete focus tasks. Fill in every field using the request, the assignment queue, and reasonable planning judgment. Do not invent deadlines or grading weights. Return only a JSON object with a tasks array. Each task must contain exactly: label, project, estimate, due, description, timeline. Use short labels, estimates like "45m" or "2h", ISO dates for due when known, and 2 to 4 timeline steps.
+
+Today: ${today}
+User request: ${prompt}
+
+Current focus tasks:
+${JSON.stringify(currentTasks)}
+
+Assignment queue:
+${JSON.stringify(assignments)}`
+  const response = await fetch('http://localhost:11434/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal,
+    body: JSON.stringify({
+      model: 'qwen2.5:7b',
+      stream: false,
+      format: 'json',
+      messages: [
+        { role: 'system', content: 'Create complete, actionable focus tasks. Output valid JSON only.' },
+        { role: 'user', content: request },
       ],
     }),
   })
@@ -399,15 +396,18 @@ function App() {
   const [focusDay, setFocusDay] = useState(() => focusState.day)
   const [focusStatus, setFocusStatus] = useState(() => focusState.shouldDraft ? 'planning' : 'ready')
   const [assignments, setAssignments] = useState(readAssignments)
-  const [calendarConfig, setCalendarConfig] = useState(readGoogleCalendarConfig)
-  const [calendarState, setCalendarState] = useState({ status: 'idle', error: '' })
-  const [showCompleted, setShowCompleted] = useState(true)
+  const [syllabusState, setSyllabusState] = useState({ status: 'idle', error: '' })
+  const [showCompleted, setShowCompleted] = useState(() => !(focusState.tasks.length && focusState.tasks.every((task) => task.done)))
+  const [taskStatus, setTaskStatus] = useState('idle')
   const [selectedTask, setSelectedTask] = useState(null)
   const [weather, setWeather] = useState(fallbackWeather)
   const [weatherStatus, setWeatherStatus] = useState('locating')
   const tasksRef = useRef(tasks)
+  const assignmentsRef = useRef(assignments)
   const lastFocusDayRef = useRef(focusState.day)
   const draftControllerRef = useRef(null)
+  const taskControllerRef = useRef(null)
+  const syllabusControllerRef = useRef(null)
 
   useEffect(() => {
     const interval = window.setInterval(() => setNow(new Date()), 1000)
@@ -416,12 +416,16 @@ function App() {
 
   const runFocusDraft = useCallback(async (day, carriedTasks) => {
     draftControllerRef.current?.abort()
+    if (!assignmentsRef.current.length) {
+      setFocusStatus('no-data')
+      return
+    }
     const controller = new AbortController()
     draftControllerRef.current = controller
     setFocusStatus('planning')
 
     try {
-      const draftedTasks = await draftFocusTasks(day, carriedTasks, controller.signal)
+      const draftedTasks = await draftFocusTasks(day, carriedTasks, assignmentsRef.current, controller.signal)
       if (controller.signal.aborted || lastFocusDayRef.current !== day) return
       setTasks((current) => [...current, ...draftedTasks])
       setFocusStatus(draftedTasks.length ? 'ready' : 'offline')
@@ -449,6 +453,10 @@ function App() {
   }, [assignments])
 
   useEffect(() => {
+    if (tasks.length && tasks.every((task) => task.done)) setShowCompleted(false)
+  }, [tasks])
+
+  useEffect(() => {
     if (focusState.shouldDraft) runFocusDraft(focusState.day, tasksRef.current)
     return () => draftControllerRef.current?.abort()
   }, [focusState, runFocusDraft])
@@ -465,29 +473,42 @@ function App() {
     runFocusDraft(today, carriedTasks)
   }, [now, runFocusDraft])
 
-  const connectGoogleCalendar = useCallback(async (clientId) => {
-    const normalizedClientId = clientId.trim()
-    if (!normalizedClientId) return
-    setCalendarState({ status: 'connecting', error: '' })
+  const importSyllabi = useCallback(async (files) => {
+    if (!files.length) return
+    syllabusControllerRef.current?.abort()
+    const controller = new AbortController()
+    syllabusControllerRef.current = controller
+    setSyllabusState({ status: 'importing', error: '' })
     try {
-      const accessToken = await requestGoogleAccessToken(normalizedClientId)
-      const importedAssignments = await loadGoogleCalendarAssignments(accessToken, now)
-      const nextConfig = { clientId: normalizedClientId }
-      window.localStorage.setItem(GOOGLE_CALENDAR_CONFIG_KEY, JSON.stringify(nextConfig))
-      setCalendarConfig(nextConfig)
-      setAssignments(importedAssignments)
-      setCalendarState({ status: 'connected', error: '' })
+      const sources = await Promise.all(files.map(async (file) => {
+        if (!/\.(txt|md|csv|json|html?|pdf)$/i.test(file.name)) throw new Error(`${file.name} is not a supported syllabus. Use .txt, .md, .csv, .json, .html, or .pdf.`)
+        return readSyllabusFile(file)
+      }))
+      const importedAssignments = await draftAssignmentsFromSyllabi(sources, now, controller.signal)
+      if (controller.signal.aborted) return
+      setAssignments((current) => {
+        const next = [...current]
+        importedAssignments.forEach((item) => {
+          const duplicate = next.find((existing) => existing.title.toLowerCase() === item.title.toLowerCase() && existing.course.toLowerCase() === item.course.toLowerCase())
+          if (duplicate) Object.assign(duplicate, item)
+          else next.push(item)
+        })
+        return next.sort((a, b) => (a.dueInHours ?? Number.MAX_SAFE_INTEGER) - (b.dueInHours ?? Number.MAX_SAFE_INTEGER))
+      })
+      setSyllabusState({ status: importedAssignments.length ? 'ready' : 'empty', error: '' })
     } catch (error) {
-      if (error.name !== 'AbortError') setCalendarState({ status: 'error', error: error.message })
+      if (!controller.signal.aborted && error.name !== 'AbortError') setSyllabusState({ status: 'error', error: error.message })
     }
   }, [now])
 
-  const disconnectGoogleCalendar = useCallback(() => {
-    window.localStorage.removeItem(GOOGLE_CALENDAR_CONFIG_KEY)
+  useEffect(() => () => syllabusControllerRef.current?.abort(), [])
+
+  useEffect(() => () => taskControllerRef.current?.abort(), [])
+
+  const clearAssignments = useCallback(() => {
     window.localStorage.removeItem(ASSIGNMENTS_STATE_KEY)
-    setCalendarConfig({ clientId: '' })
     setAssignments([])
-    setCalendarState({ status: 'idle', error: '' })
+    setSyllabusState({ status: 'idle', error: '' })
   }, [])
 
   useEffect(() => {
@@ -544,10 +565,25 @@ function App() {
     setSelectedTask((current) => current && current.id === id ? { ...current, done: !current.done } : current)
   }, [])
 
-  const addTask = useCallback((label) => {
-    const nextTask = { id: `t${Date.now()}`, label, project: 'inbox', estimate: '30m', due: '', description: 'Captured from the focus input. Add more context so the next step is obvious.', timeline: ['Define the first concrete step', 'Make a small block of progress', 'Review and decide what comes next'], done: false }
-    setTasks((current) => [...current, nextTask])
-    setSelectedTask(nextTask)
+  const createTasksFromPrompt = useCallback(async (prompt) => {
+    taskControllerRef.current?.abort()
+    const controller = new AbortController()
+    taskControllerRef.current = controller
+    setTaskStatus('planning')
+
+    try {
+      const draftedTasks = await draftTasksFromPrompt(prompt, tasksRef.current, assignmentsRef.current, controller.signal)
+      if (controller.signal.aborted) return []
+      setTasks((current) => [...current, ...draftedTasks])
+      if (draftedTasks[0]) setSelectedTask(draftedTasks[0])
+      setTaskStatus(draftedTasks.length ? 'ready' : 'empty')
+      return draftedTasks
+    } catch (error) {
+      if (!controller.signal.aborted) setTaskStatus('offline')
+      throw error
+    } finally {
+      if (taskControllerRef.current === controller) taskControllerRef.current = null
+    }
   }, [])
 
   const updateTask = useCallback((id, updates) => {
@@ -565,17 +601,17 @@ function App() {
         <main className="dashboard-grid">
           <FocusTasks
             tasks={tasks}
-            onAdd={addTask}
             onOpen={setSelectedTask}
             showCompleted={showCompleted}
             onToggleCompleted={() => setShowCompleted((current) => !current)}
             focusStatus={focusStatus}
+            taskStatus={taskStatus}
             index={0}
           />
 
           <div className="side-stack">
             <WeatherPanel index={1} weather={weather} weatherStatus={weatherStatus} />
-            <AssignmentsPanel now={now} assignments={assignments} index={2} calendarState={calendarState} clientId={calendarConfig.clientId} onConnect={connectGoogleCalendar} onDisconnect={disconnectGoogleCalendar} />
+            <AssignmentsPanel now={now} assignments={assignments} index={2} syllabusState={syllabusState} onImport={importSyllabi} onClear={clearAssignments} />
           </div>
 
           <PullRequestsPanel index={3} />
@@ -590,7 +626,7 @@ function App() {
         </footer>
       </div>
       {selectedTask && <TaskModal task={selectedTask} onClose={() => setSelectedTask(null)} onToggle={toggleTask} onSave={updateTask} />}
-      <ChatBar />
+      <ChatBar tasks={tasks} assignments={assignments} onCreateTasks={createTasksFromPrompt} />
     </div>
   )
 }
@@ -620,23 +656,15 @@ function Panel({ path, meta, children, primary = false, index = 0, className = '
   )
 }
 
-function FocusTasks({ tasks, onAdd, onOpen, showCompleted, onToggleCompleted, focusStatus, index }) {
+function FocusTasks({ tasks, onOpen, showCompleted, onToggleCompleted, focusStatus, taskStatus, index }) {
   const completed = tasks.filter((task) => task.done).length
   const visible = showCompleted ? tasks : tasks.filter((task) => !task.done)
   const progress = tasks.length === 0 ? 0 : Math.round((completed / tasks.length) * 100)
-  const syncLabel = focusStatus === 'planning' ? 'Qwen drafting...' : focusStatus === 'offline' ? 'Qwen unavailable' : ''
-
-  function submit(event) {
-    event.preventDefault()
-    const input = event.currentTarget.elements.task
-    const label = input.value.trim()
-    if (!label) return
-    onAdd(label)
-    input.value = ''
-  }
+  const syncLabel = taskStatus === 'planning' ? 'Qwen drafting task...' : taskStatus === 'offline' ? 'Qwen unavailable' : focusStatus === 'planning' ? 'Qwen drafting...' : focusStatus === 'offline' ? 'Qwen unavailable' : ''
+  const syncState = taskStatus === 'planning' || taskStatus === 'offline' ? taskStatus : focusStatus
 
   return (
-    <Panel path="~/focus/today.md" primary index={index} className="focus-panel" meta={<span className="focus-meta"><button className="panel-meta-button" onClick={onToggleCompleted}>{completed}/{tasks.length} done</button>{syncLabel && <span className={`focus-sync-status ${focusStatus}`}> · {syncLabel}</span>}</span>}>
+    <Panel path="~/focus/today.md" primary index={index} className="focus-panel" meta={<span className="focus-meta"><button type="button" className="panel-meta-button" onClick={onToggleCompleted}>{completed}/{tasks.length} done</button>{syncLabel && <span className={`focus-sync-status ${syncState}`}> · {syncLabel}</span>}</span>}>
       <div className="progress-row"><div className="progress-track"><span style={{ width: `${progress}%` }} /></div><span>{progress}%</span></div>
       <ul className="focus-list">
         {visible.map((task, position) => {
@@ -646,9 +674,8 @@ function FocusTasks({ tasks, onAdd, onOpen, showCompleted, onToggleCompleted, fo
             <span className="task-text"><strong>{task.label}</strong><small>{String(position + 1).padStart(2, '0')} · {task.project} · est {task.estimate}{isNext && <em> · up next</em>}</small></span><span className="task-open" aria-hidden="true">↗</span>
           </button></li>
         })}
-        {visible.length === 0 && <li className="empty-task">everything checked off.<small>Add something below or close the laptop.</small></li>}
+        {visible.length === 0 && <li className="empty-task">everything checked off.<small>Ask Qwen in the assistant to add another focus task.</small></li>}
       </ul>
-      <form className="add-task-form" onSubmit={submit}><label htmlFor="new-task">&gt;</label><input id="new-task" name="task" placeholder="add a focus task..." autoComplete="off" /><button type="submit">+ add</button></form>
     </Panel>
   )
 }
@@ -724,29 +751,12 @@ const suggestedPrompts = [
   'Summarize my week',
 ]
 
-const assistantReply = {
-  thinking: 'Checked task due dates, current time, and recent PR metadata.',
-  answer: `Here's how I'd sequence the rest of your day.
+const CHAT_ACTIVITY_LABELS = ['Thinking', 'Combobulating', 'Checking the dashboard', 'Writing']
 
-**Suggested blocks**
-
-1. **14:45 – 16:15 – CS-441 write-up.** Hard deadline in 6h and worth 15% of the grade.
-   Nothing else in the board is time-boxed this tightly.
-2. **16:15 – 16:45 – Review Priya's scheduler PR.** Short, and it's currently blocking someone else. CI is red on it, so flag the failing job in your review rather than leaving every line.
-3. **16:45 – 18:45 – Ship refresh-token rotation.** \`orbit-api#1842\` is already approved with green checks, so this is merge-and-monitor rather than new work.
-
-**What I'd drop**
-
-- The flaky snapshot tests are already checked off, so ignore them.
-- \`dotfiles#77\` is a draft with no reviewer waiting – leave it for the weekend.
-
-> Rain probability climbs to 35% around 19:00, so if you run planning to walk, go before 18:00.
-
-Want me to rewrite your focus list in this order?`,
-}
-
-function tokenize(text) {
-  return text.split(/(\s+)/).filter(Boolean)
+function isTaskPrompt(prompt) {
+  const mentionsTask = /\b(tasks?|todo|to-do|focus item|focus list)\b/i.test(prompt)
+  const requestsCreation = /\b(add|create|capture|make)\b/i.test(prompt) || /\b(turn|convert)\b[\s\S]*\binto\b/i.test(prompt)
+  return mentionsTask && requestsCreation
 }
 
 function renderInline(text, keyPrefix) {
@@ -773,70 +783,122 @@ function AssistantMarkdown({ text }) {
   })}</div>
 }
 
-function ChatBar() {
+async function streamQwenChat(messages, onChunk, signal) {
+  const response = await fetch('http://localhost:11434/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal,
+    body: JSON.stringify({ model: 'qwen2.5:7b', stream: true, messages }),
+  })
+  if (!response.ok) throw new Error(`Qwen returned ${response.status}`)
+  if (!response.body) {
+    const data = await response.json()
+    onChunk({ content: data.message?.content || data.response || '', thinking: data.message?.thinking || data.thinking || '' })
+    return
+  }
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  while (true) {
+    const { value, done } = await reader.read()
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() || ''
+    lines.forEach((line) => {
+      if (!line.trim()) return
+      const data = JSON.parse(line)
+      onChunk({ content: data.message?.content || data.response || '', thinking: data.message?.thinking || data.thinking || '' })
+    })
+    if (done) break
+  }
+  if (buffer.trim()) {
+    const data = JSON.parse(buffer)
+    onChunk({ content: data.message?.content || data.response || '', thinking: data.message?.thinking || data.thinking || '' })
+  }
+}
+
+function ChatBar({ tasks, assignments, onCreateTasks }) {
   const [isOpen, setIsOpen] = useState(true)
   const [draft, setDraft] = useState('')
   const [messages, setMessages] = useState([])
   const [isStreaming, setIsStreaming] = useState(false)
   const [thinkingOpen, setThinkingOpen] = useState(false)
   const scrollRef = useRef(null)
-  const timers = useRef([])
+  const chatControllerRef = useRef(null)
+  const activityTimerRef = useRef(null)
 
-  useEffect(() => () => timers.current.forEach((timer) => window.clearInterval(timer)), [])
+  useEffect(() => () => {
+    chatControllerRef.current?.abort()
+    if (activityTimerRef.current) window.clearInterval(activityTimerRef.current)
+  }, [])
 
   useEffect(() => {
     if (isOpen && scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
   }, [messages, isOpen])
 
   function reset() {
-    timers.current.forEach((timer) => window.clearInterval(timer))
-    timers.current = []
+    chatControllerRef.current?.abort()
+    if (activityTimerRef.current) window.clearInterval(activityTimerRef.current)
     setMessages([])
     setIsStreaming(false)
     setThinkingOpen(false)
   }
 
-  function send(value) {
+  async function send(value) {
     const prompt = value.trim()
     if (!prompt || isStreaming) return
     const assistantId = Date.now()
-    setMessages((current) => [...current, { role: 'user', content: prompt }, { id: assistantId, role: 'assistant', content: '', thinking: '', phase: 'thinking' }])
+    const context = `Dashboard context:\nFocus tasks:\n${JSON.stringify(tasks)}\n\nAssignment queue:\n${JSON.stringify(assignments)}`
+    const history = messages.filter((message) => message.role === 'user' || (message.role === 'assistant' && message.content)).slice(-8).map((message) => ({ role: message.role, content: message.content }))
+    setMessages((current) => [...current, { role: 'user', content: prompt }, { id: assistantId, role: 'assistant', content: '', thinking: '', phase: 'thinking', activity: CHAT_ACTIVITY_LABELS[0] }])
     setDraft('')
     setThinkingOpen(true)
     setIsStreaming(true)
-
-    const thinkingTokens = tokenize(assistantReply.thinking)
-    const answerTokens = tokenize(assistantReply.answer)
-    let cursor = 0
-    const thinkTimer = window.setInterval(() => {
-      cursor += 2
-      setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, thinking: thinkingTokens.slice(0, cursor).join('') } : message))
-      if (cursor >= thinkingTokens.length) {
-        window.clearInterval(thinkTimer)
-        setThinkingOpen(false)
-        setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, phase: 'answering', thoughtSeconds: 1, thinking: assistantReply.thinking } : message))
-        let answerCursor = 0
-        const answerTimer = window.setInterval(() => {
-          answerCursor += 2
-          setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content: answerTokens.slice(0, answerCursor).join('') } : message))
-          if (answerCursor >= answerTokens.length) {
-            window.clearInterval(answerTimer)
-            setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, phase: 'done' } : message))
-            setIsStreaming(false)
-          }
-        }, 18)
-        timers.current.push(answerTimer)
+    const controller = new AbortController()
+    chatControllerRef.current = controller
+    let activityIndex = 0
+    activityTimerRef.current = window.setInterval(() => {
+      activityIndex = (activityIndex + 1) % CHAT_ACTIVITY_LABELS.length
+      setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, activity: CHAT_ACTIVITY_LABELS[activityIndex] } : message))
+    }, 1400)
+    try {
+      if (isTaskPrompt(prompt)) {
+        const draftedTasks = await onCreateTasks(prompt)
+        if (!controller.signal.aborted) {
+          const summary = draftedTasks.length
+            ? `Added ${draftedTasks.length} focus task${draftedTasks.length === 1 ? '' : 's'} through Qwen.\n\n${draftedTasks.map((task, index) => `${index + 1}. **${task.label}** - ${task.project}, ${task.estimate}${task.due ? `, due ${task.due}` : ''}`).join('\n')}`
+            : 'Qwen could not turn that request into a concrete focus task.'
+          setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, phase: 'done', content: summary, thoughtSeconds: Math.max(1, Math.round((Date.now() - assistantId) / 1000)) } : message))
+        }
+      } else {
+        await streamQwenChat([
+          { role: 'system', content: 'You are Qwen, the local assistant inside the Start dashboard. Be concise, practical, and ground your answer in the dashboard context. Explain your recommendation briefly, and never claim to have taken an action you did not take.' },
+          ...history,
+          { role: 'user', content: `${prompt}\n\n${context}` },
+        ], ({ content, thinking }) => {
+          if (!content && !thinking) return
+          setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, phase: content ? 'answering' : message.phase, content: `${message.content}${content}`, thinking: `${message.thinking}${thinking}` } : message))
+        }, controller.signal)
+        if (!controller.signal.aborted) setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, phase: 'done', thoughtSeconds: Math.max(1, Math.round((Date.now() - assistantId) / 1000)) } : message))
       }
-    }, 16)
-    timers.current.push(thinkTimer)
+    } catch (error) {
+      if (!controller.signal.aborted) setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, phase: 'error', activity: 'Qwen unavailable', content: `I couldn’t reach local Qwen. Start Ollama and make sure qwen2.5:7b is installed.\n\n${error.message}` } : message))
+    } finally {
+      if (activityTimerRef.current) window.clearInterval(activityTimerRef.current)
+      activityTimerRef.current = null
+      if (chatControllerRef.current === controller) chatControllerRef.current = null
+      setIsStreaming(false)
+      setThinkingOpen(false)
+    }
   }
 
   function stop() {
-    timers.current.forEach((timer) => window.clearInterval(timer))
-    timers.current = []
+    chatControllerRef.current?.abort()
+    if (activityTimerRef.current) window.clearInterval(activityTimerRef.current)
+    activityTimerRef.current = null
     setIsStreaming(false)
     setThinkingOpen(false)
-    setMessages((current) => current.map((message) => message.phase ? { ...message, phase: 'done' } : message))
+    setMessages((current) => current.map((message) => message.phase === 'thinking' || message.phase === 'answering' ? { ...message, phase: 'done', activity: 'Stopped' } : message))
   }
 
   function submit(event) {
@@ -859,7 +921,7 @@ function ChatBar() {
           <p>It can see your focus list, assignment queue, open pull requests, and today’s forecast. Ask it to triage, plan, or explain anything on screen.</p>
           <div className="assistant-prompts">{suggestedPrompts.map((prompt) => <button key={prompt} type="button" onClick={() => send(prompt)}><span aria-hidden="true">&gt;</span>{prompt}</button>)}</div>
         </div> : messages.map((message, index) => message.role === 'user' ? <div className="assistant-user-message" key={`${message.role}-${index}`}>{message.content}</div> : <div className="assistant-response" key={message.id}>
-          <button type="button" className="assistant-thinking-toggle" onClick={() => setThinkingOpen((value) => !value)} aria-expanded={thinkingOpen}><span aria-hidden="true">›</span>{message.phase === 'thinking' ? 'Thinking…' : `Thought for ${message.thoughtSeconds || 1}s`}</button>
+          <button type="button" className="assistant-thinking-toggle" onClick={() => setThinkingOpen((value) => !value)} aria-expanded={thinkingOpen}><span aria-hidden="true">›</span>{message.phase === 'done' ? `Thought for ${message.thoughtSeconds || 1}s` : message.activity || 'Thinking'}</button>
           {thinkingOpen && message.thinking ? <p className="assistant-thinking-copy">{message.thinking}</p> : null}
           {message.content ? <AssistantMarkdown text={message.content} /> : null}
         </div>)}
@@ -892,7 +954,6 @@ function LegacyAssignmentsPanel({ now, index }) {
   const soon = assignments.filter((item) => item.dueInHours <= 24).length
   return <Panel path="~/edu/assignments" index={index} className="assignments-panel" meta={<span>{assignments.length} queued <b className="danger-text">· {soon} due &lt;24h</b></span>}>
     <ol className="assignment-list"><span className="assignment-line" aria-hidden="true" />{assignments.map((item) => <li key={item.id}><span className={`assignment-dot ${item.dueInHours <= 12 ? 'danger-dot' : item.dueInHours <= 48 ? 'warn-dot' : ''}`} aria-hidden="true" /><div><div className="assignment-title"><strong>{item.title}</strong><span className={item.dueInHours <= 12 ? 'danger-text' : item.dueInHours <= 48 ? 'warn-text' : ''}>{dueLabel(item.dueInHours)}</span></div><small>{item.course} · {item.kind} · {item.weight} of grade · due {dueClock(item.dueInHours, now)}</small></div></li>)}</ol>
-*/
 function AssignmentsPanel({ now, assignments, index, calendarState, clientId, onConnect, onDisconnect }) {
   const soon = assignments.filter((item) => Number.isFinite(item.dueInHours) && item.dueInHours <= 24).length
   const meta = assignments.length ? <span>{assignments.length} queued <b className="danger-text">· {soon} due &lt;24h</b></span> : calendarState.status === 'connected' ? <span>google calendar · 0 matches</span> : null
@@ -933,6 +994,34 @@ function GoogleCalendarSetup({ clientId, state, onConnect, onDisconnect }) {
 
 function CalendarClientIdForm({ value, onChange, onSubmit }) {
   return <form className="calendar-setup" onSubmit={onSubmit}><label><span>Google OAuth client ID</span><input value={value} onChange={(event) => onChange(event.target.value)} placeholder="123...apps.googleusercontent.com" autoComplete="off" required /></label><button type="submit" className="calendar-connect">connect Google Calendar <span aria-hidden="true">↗</span></button><small>Use a Web application client ID with this app&apos;s local URL as an authorized origin.</small><a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noreferrer">create a client ID in Google Cloud ↗</a></form>
+}
+
+*/
+
+function AssignmentsPanel({ now, assignments, index, syllabusState, onImport, onClear }) {
+  const soon = assignments.filter((item) => Number.isFinite(item.dueInHours) && item.dueInHours <= 24).length
+  const meta = assignments.length ? <span>{assignments.length} queued <b className="danger-text">· {soon} due &lt;24h</b></span> : syllabusState.status === 'importing' ? <span>qwen extracting...</span> : null
+  return <Panel path="~/edu/assignments" index={index} className="assignments-panel" meta={meta}>
+    {assignments.length ? <><div className="assignment-toolbar"><span>source: syllabi · qwen-2.5-7b</span><SyllabusImportButton label="add more syllabi" onImport={onImport} /><button type="button" className="assignment-action" onClick={onClear}>clear</button></div><ol className="assignment-list"><span className="assignment-line" aria-hidden="true" />{assignments.map((item) => {
+      const dueHours = Number.isFinite(item.dueInHours) ? item.dueInHours : null
+      const dueText = item.dueAt || (dueHours === null ? 'date not set' : dueClock(dueHours, now))
+      return <li key={item.id}><span className={`assignment-dot ${dueHours !== null && dueHours <= 12 ? 'danger-dot' : dueHours !== null && dueHours <= 48 ? 'warn-dot' : ''}`} aria-hidden="true" /><div><div className="assignment-title"><strong>{item.title}</strong><span className={dueHours !== null && dueHours <= 12 ? 'danger-text' : dueHours !== null && dueHours <= 48 ? 'warn-text' : ''}>{dueHours === null ? '—' : dueLabel(dueHours)}</span></div><small>{[item.course, item.kind, item.weight && `${item.weight} of grade`, `due ${dueText}`].filter(Boolean).join(' · ')}</small></div></li>
+    })}</ol></> : <SyllabusSetup state={syllabusState} onImport={onImport} />}
+  </Panel>
+}
+
+function SyllabusSetup({ state, onImport }) {
+  if (state.status === 'importing') return <div className="assignment-empty"><strong>Qwen is reading your syllabi...</strong><small>Extracting dated assignments, exams, labs, and projects locally.</small></div>
+  return <div className={`assignment-empty ${state.status === 'error' ? 'assignment-error' : ''}`}><strong>{state.status === 'empty' ? 'No assignments found.' : 'Add your syllabi.'}</strong><small>{state.status === 'error' ? state.error : 'Qwen will extract assignments and midterms from text-based syllabus files and PDFs.'}</small><SyllabusImportButton onImport={onImport} /><small>Supported: .txt, .md, .csv, .json, .html, and .pdf files.</small></div>
+}
+
+function SyllabusImportButton({ label = 'add syllabus', onImport }) {
+  const inputRef = useRef(null)
+  function chooseFiles(event) {
+    onImport(Array.from(event.target.files || []))
+    event.target.value = ''
+  }
+  return <><input ref={inputRef} className="visually-hidden" type="file" accept=".txt,.md,.csv,.json,.html,.htm,.pdf,text/plain,text/markdown,text/csv,application/json,text/html,application/pdf" multiple onChange={chooseFiles} /><button type="button" className="syllabus-connect" onClick={() => inputRef.current?.click()}>{label} <span aria-hidden="true">↗</span></button></>
 }
 
 function PullRequestsPanel({ index }) {

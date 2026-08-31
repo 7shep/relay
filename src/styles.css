@@ -91,12 +91,6 @@ h1 { display: flex; align-items: baseline; margin-top: 7px; color: var(--term-te
 .focus-task:hover .task-open, .focus-task:focus-visible .task-open { opacity: 1; color: var(--term-accent); transform: translate(1px, -1px); }
 .empty-task { padding: 33px 10px; color: var(--term-accent); text-align: center; }
 .empty-task small { display: block; margin-top: 6px; color: var(--term-muted); }
-.add-task-form { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-top: 1px solid var(--term-border); }
-.add-task-form label { color: var(--term-accent); }
-.add-task-form input { min-width: 0; flex: 1; border: 0; outline: 0; color: var(--term-text); background: transparent; font-size: 12px; }
-.add-task-form input::placeholder { color: var(--term-muted); }
-.add-task-form button { padding: 4px 7px; border: 1px solid var(--term-border); color: var(--term-muted); background: transparent; font-size: 10px; }
-.add-task-form button:hover { border-color: var(--term-accent-line); color: var(--term-accent); }
 
 .weather-details { display: flex; justify-content: space-between; gap: 15px; padding: 12px 10px; }
 .large-temp { display: block; color: var(--term-text); font-size: 27px; font-weight: 400; letter-spacing: -0.06em; line-height: 1; }
@@ -127,18 +121,13 @@ h1 { display: flex; align-items: baseline; margin-top: 7px; color: var(--term-te
 .assignment-empty { display: grid; gap: 6px; padding: 18px 10px; color: var(--term-muted); font-size: 10px; }
 .assignment-empty strong { color: var(--term-text); font-weight: 400; }
 .assignment-empty small { font-size: 8px; line-height: 1.5; }
-.calendar-setup { display: grid; gap: 7px; margin-top: 4px; }
-.calendar-setup label { display: grid; gap: 4px; }
-.calendar-setup label span { color: var(--term-muted); font-size: 8px; }
-.calendar-setup input { width: 100%; min-width: 0; padding: 7px 8px; border: 1px solid var(--term-border); color: var(--term-text); background: var(--term-bg); font: inherit; font-size: 9px; }
-.calendar-setup input:focus-visible { border-color: var(--term-accent); outline: 0; }
-.calendar-setup small { color: var(--term-muted); }
-.calendar-setup a, .calendar-action, .calendar-connect { width: fit-content; border: 0; color: var(--term-accent); background: transparent; font: inherit; font-size: 9px; text-align: left; }
-.calendar-setup a, .calendar-action { text-decoration: underline; text-underline-offset: 2px; }
-.calendar-connect { padding: 7px 9px; border: 1px solid var(--term-accent-dim); background: var(--term-accent-dim); text-decoration: none; }
-.calendar-connect:hover, .calendar-connect:focus-visible, .calendar-action:hover, .calendar-action:focus-visible, .calendar-setup a:focus-visible { color: var(--term-text); outline: 1px solid var(--term-accent); outline-offset: 2px; }
-.calendar-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 2px; }
-.calendar-error > small { color: var(--term-danger); }
+.assignment-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 10px 0; color: var(--term-muted); font-size: 8px; }
+.assignment-toolbar > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.syllabus-connect, .assignment-action { width: fit-content; border: 0; color: var(--term-accent); background: transparent; font: inherit; font-size: 9px; text-align: left; }
+.syllabus-connect { padding: 7px 9px; border: 1px solid var(--term-accent-dim); background: var(--term-accent-dim); }
+.syllabus-connect:hover, .syllabus-connect:focus-visible, .assignment-action:hover, .assignment-action:focus-visible { color: var(--term-text); outline: 1px solid var(--term-accent); outline-offset: 2px; }
+.assignment-action { text-decoration: underline; text-underline-offset: 2px; }
+.assignment-error > small { color: var(--term-danger); }
 
 .pulls-scroll { overflow-x: auto; }
 table { width: 100%; min-width: 720px; border-collapse: collapse; text-align: left; }

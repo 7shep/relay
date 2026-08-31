@@ -1,0 +1,19 @@
+﻿import { formatClock, formatDateLine, greetingFor } from '../utils/dates.js'
+
+export default function DashboardHeader({ name, now, tasksLeft, weather, weatherStatus }) {
+  return (
+    <header className="dashboard-header">
+      <div className="header-copy">
+        <p className="command-line">alex@localhost:~$ ./dashboard --today</p>
+        <h1><span className="accent-text">{greetingFor(now)},</span> {name}<span className="caret" aria-hidden="true" /></h1>
+        <p className="header-meta">{formatDateLine(now)} <span aria-hidden="true">Â·</span> <span className="bright-text">{formatClock(now)}</span> <span aria-hidden="true">Â·</span> {tasksLeft} focus task{tasksLeft === 1 ? '' : 's'} remaining</p>
+      </div>
+      <div className="weather-summary">
+        <span className="weather-glyph" aria-hidden="true">â˜¼</span>
+        <div><strong>{weather.temp}Â°C <span>/ {weather.condition.toLowerCase()}</span></strong><small>{weatherStatus === 'live' ? weather.location : `location ${weatherStatus}`}</small></div>
+      </div>
+    </header>
+  )
+}
+
+

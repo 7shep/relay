@@ -1,0 +1,187 @@
+﻿.modal-backdrop {
+  position: fixed;
+  z-index: 20;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 22px;
+  background: rgb(0 0 0 / 0.78);
+}
+.task-modal {
+  width: min(100%, 560px);
+  max-height: min(720px, calc(100vh - 44px));
+  overflow-y: auto;
+  border: 1px solid var(--term-accent-line);
+  background: var(--term-panel);
+  box-shadow: 0 24px 80px rgb(0 0 0 / 0.5);
+  scrollbar-color: var(--term-border) var(--term-panel);
+  scrollbar-width: thin;
+}
+.task-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--term-border);
+}
+.modal-close {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--term-border);
+  color: var(--term-muted);
+  background: transparent;
+  font-size: 16px;
+  line-height: 1;
+}
+.modal-close:hover {
+  border-color: var(--term-accent-line);
+  color: var(--term-accent);
+}
+.task-detail {
+  padding: 20px;
+}
+.task-detail-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.task-detail-id {
+  color: var(--term-muted);
+  font-size: 9px;
+}
+.task-detail h2 {
+  margin-top: 12px;
+  color: var(--term-text);
+  font-size: clamp(20px, 4vw, 29px);
+  font-weight: 400;
+  letter-spacing: -0.06em;
+  line-height: 1.15;
+}
+.task-description {
+  margin-top: 13px;
+  color: var(--term-muted);
+  font-size: 11px;
+  line-height: 1.7;
+}
+.task-facts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  margin-top: 21px;
+  border: 1px solid var(--term-border);
+  background: var(--term-border);
+}
+.task-facts div {
+  display: grid;
+  gap: 6px;
+  padding: 11px;
+  background: var(--term-panel);
+}
+.task-facts span,
+.task-edit-form label > span {
+  color: var(--term-muted);
+  font-size: 9px;
+}
+.task-facts strong {
+  color: var(--term-text);
+  font-size: 11px;
+  font-weight: 400;
+}
+.timeline-block {
+  margin-top: 22px;
+}
+.timeline-block ol {
+  display: grid;
+  gap: 0;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.timeline-block li {
+  display: grid;
+  grid-template-columns: 26px 1fr;
+  gap: 9px;
+  padding: 10px 0;
+  border-top: 1px solid var(--term-border);
+  color: var(--term-text);
+  font-size: 10px;
+  line-height: 1.5;
+}
+.timeline-block li span {
+  color: var(--term-accent);
+}
+.timeline-empty {
+  color: var(--term-muted) !important;
+}
+.task-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 22px;
+}
+.modal-secondary,
+.modal-primary {
+  padding: 7px 10px;
+  border: 1px solid var(--term-border);
+  font-size: 10px;
+}
+.modal-secondary {
+  color: var(--term-muted);
+  background: transparent;
+}
+.modal-secondary:hover {
+  border-color: var(--term-accent-line);
+  color: var(--term-accent);
+}
+.modal-primary {
+  border-color: var(--term-accent-line);
+  color: var(--term-accent);
+  background: var(--term-accent-dim);
+}
+.modal-primary:hover {
+  background: #16432e;
+}
+.reopen-button {
+  border-color: var(--term-border);
+  color: var(--term-muted);
+  background: transparent;
+}
+.task-edit-form {
+  display: grid;
+  gap: 14px;
+  padding: 20px;
+}
+.task-edit-form label {
+  display: grid;
+  gap: 6px;
+}
+.task-edit-form label > span small {
+  color: var(--term-muted);
+}
+.task-edit-form input,
+.task-edit-form textarea {
+  width: 100%;
+  resize: vertical;
+  padding: 8px;
+  border: 1px solid var(--term-border);
+  outline: 0;
+  color: var(--term-text);
+  background: var(--term-bg);
+  font-size: 11px;
+}
+.task-edit-form input:focus,
+.task-edit-form textarea:focus {
+  border-color: var(--term-accent-line);
+}
+.task-edit-form textarea {
+  min-height: 68px;
+  line-height: 1.55;
+}
+.task-edit-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}

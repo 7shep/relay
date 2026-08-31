@@ -1,0 +1,52 @@
+.icon {
+  display: inline-block;
+  flex: 0 0 auto;
+  vertical-align: middle;
+}
+
+.weather-summary .weather-glyph {
+  line-height: 1;
+}
+
+.weather-details dt {
+  display: flex;
+  align-items: center;
+}
+
+.task-box .icon {
+  display: block;
+}
+
+.task-open {
+  width: 13px;
+  height: 13px;
+  padding: 0;
+  font-size: initial;
+}
+
+.github-message > .icon {
+  align-self: start;
+  animation: icon-spin 900ms linear infinite;
+}
+
+.assistant-prompts button .icon {
+  margin-right: 5px;
+  color: var(--term-accent);
+}
+
+.assistant-thinking-toggle .icon,
+.assistant-collapsed > .icon {
+  color: var(--term-muted);
+}
+
+@keyframes icon-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .github-message > .icon {
+    animation: none;
+  }
+}

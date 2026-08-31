@@ -1,5 +1,6 @@
 ﻿import { useEffect, useRef, useState } from 'react'
 import { formatTaskDue } from '../utils/dates.js'
+import Icon from './Icons.jsx'
 
 export default function TaskModal({ task, onClose, onToggle, onSave }) {
   const [editing, setEditing] = useState(false)
@@ -47,7 +48,7 @@ export default function TaskModal({ task, onClose, onToggle, onSave }) {
   const timelineText = editing ? draft.timelineText : task.timeline.join('\n')
   return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
     <section className="task-modal" role="dialog" aria-modal="true" aria-labelledby="task-modal-title" aria-describedby="task-modal-description">
-      <header className="task-modal-header"><span className="command-line">$ cat ~/focus/{task.id}.md</span><button ref={closeRef} className="modal-close" onClick={onClose} aria-label="Close task details">Ã—</button></header>
+      <header className="task-modal-header"><span className="command-line">$ cat ~/focus/{task.id}.md</span><button ref={closeRef} className="modal-close" onClick={onClose} aria-label="Close task details"><Icon name="close" size={15} /></button></header>
       {editing ? <form className="task-edit-form" onSubmit={save}>
         <label><span>task</span><input value={draft.label} onChange={(event) => updateDraft('label', event.target.value)} autoFocus /></label>
         <label><span>description</span><textarea value={draft.description} onChange={(event) => updateDraft('description', event.target.value)} rows="3" /></label>

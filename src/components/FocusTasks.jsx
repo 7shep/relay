@@ -1,4 +1,5 @@
-﻿import Panel from './Panel.jsx'
+import Panel from './Panel.jsx'
+import Icon from './Icons.jsx'
 
 export default function FocusTasks({ tasks, onOpen, showCompleted, onToggleCompleted, focusStatus, taskStatus, index }) {
   const completed = tasks.filter((task) => task.done).length
@@ -14,8 +15,8 @@ export default function FocusTasks({ tasks, onOpen, showCompleted, onToggleCompl
         {visible.map((task, position) => {
           const isNext = !task.done && visible.find((item) => !item.done)?.id === task.id
           return <li key={task.id}><button className={`focus-task ${isNext ? 'next-task' : ''} ${task.done ? 'completed-task' : ''}`} onClick={() => onOpen(task)} aria-haspopup="dialog">
-            <span className="task-box" aria-hidden="true">{task.done ? 'Ã—' : ''}</span>
-            <span className="task-text"><strong>{task.label}</strong><small>{String(position + 1).padStart(2, '0')} Â· {task.project} Â· est {task.estimate}{isNext && <em> Â· up next</em>}</small></span><span className="task-open" aria-hidden="true">â†—</span>
+            <span className="task-box">{task.done ? <Icon name="check" size={11} /> : null}</span>
+            <span className="task-text"><strong>{task.label}</strong><small>{String(position + 1).padStart(2, '0')} Â· {task.project} Â· est {task.estimate}{isNext && <em> Â· up next</em>}</small></span><Icon name="arrowUpRight" size={13} className="task-open" />
           </button></li>
         })}
         {visible.length === 0 && <li className="empty-task">everything checked off.<small>Ask Qwen in the assistant to add another focus task.</small></li>}
@@ -23,5 +24,3 @@ export default function FocusTasks({ tasks, onOpen, showCompleted, onToggleCompl
     </Panel>
   )
 }
-
-

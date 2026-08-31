@@ -1,7 +1,8 @@
-﻿import { useRef } from 'react'
+import { useRef } from 'react'
 import Panel from './Panel.jsx'
 import { dueClock } from '../utils/dates.js'
 import { dueLabel } from '../utils/formatting.js'
+import Icon from './Icons.jsx'
 
 export default function AssignmentsPanel({ now, assignments, index, syllabusState, onImport, onClear }) {
   const soon = assignments.filter((item) => Number.isFinite(item.dueInHours) && item.dueInHours <= 24).length
@@ -26,7 +27,5 @@ function SyllabusImportButton({ label = 'add syllabus', onImport }) {
     onImport(Array.from(event.target.files || []))
     event.target.value = ''
   }
-  return <><input ref={inputRef} className="visually-hidden" type="file" accept=".txt,.md,.csv,.json,.html,.htm,.pdf,text/plain,text/markdown,text/csv,application/json,text/html,application/pdf" multiple onChange={chooseFiles} /><button type="button" className="syllabus-connect" onClick={() => inputRef.current?.click()}>{label} <span aria-hidden="true">â†—</span></button></>
+  return <><input ref={inputRef} className="visually-hidden" type="file" accept=".txt,.md,.csv,.json,.html,.htm,.pdf,text/plain,text/markdown,text/csv,application/json,text/html,application/pdf" multiple onChange={chooseFiles} /><button type="button" className="syllabus-connect" onClick={() => inputRef.current?.click()}>{label} <Icon name="upload" size={12} /></button></>
 }
-
-

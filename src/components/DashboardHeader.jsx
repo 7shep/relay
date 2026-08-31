@@ -1,4 +1,5 @@
-﻿import { formatClock, formatDateLine, greetingFor } from '../utils/dates.js'
+import { formatClock, formatDateLine, greetingFor } from '../utils/dates.js'
+import Icon from './Icons.jsx'
 
 export default function DashboardHeader({ name, now, tasksLeft, weather, weatherStatus }) {
   return (
@@ -9,11 +10,9 @@ export default function DashboardHeader({ name, now, tasksLeft, weather, weather
         <p className="header-meta">{formatDateLine(now)} <span aria-hidden="true">Â·</span> <span className="bright-text">{formatClock(now)}</span> <span aria-hidden="true">Â·</span> {tasksLeft} focus task{tasksLeft === 1 ? '' : 's'} remaining</p>
       </div>
       <div className="weather-summary">
-        <span className="weather-glyph" aria-hidden="true">â˜¼</span>
+        <Icon name="sun" size={22} className="weather-glyph" />
         <div><strong>{weather.temp}Â°C <span>/ {weather.condition.toLowerCase()}</span></strong><small>{weatherStatus === 'live' ? weather.location : `location ${weatherStatus}`}</small></div>
       </div>
     </header>
   )
 }
-
-

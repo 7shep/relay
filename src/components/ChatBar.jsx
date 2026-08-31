@@ -2,6 +2,7 @@
 import { SIDEBAR_CHAT_SYSTEM_PROMPT } from '../constants/prompts.js'
 import { streamQwenChat } from '../services/qwen.js'
 import AssistantMarkdown from './AssistantMarkdown.jsx'
+import Icon from './Icons.jsx'
 
 const suggestedPrompts = [
   'Plan my afternoon around whatâ€™s due',
@@ -121,19 +122,19 @@ export default function ChatBar({ tasks, assignments, onCreateTasks }) {
   return <aside className={`assistant-dock ${isOpen ? 'is-open' : 'is-collapsed'}`} aria-label="Assistant sidebar">
     {isOpen ? <>
       <header className="assistant-header">
-        <h2><span className="assistant-spark" aria-hidden="true">âœ£</span><span>~/assistant</span><span className="assistant-model">qwen-2.5-7b</span></h2>
+        <h2><Icon name="spark" size={12} className="assistant-spark" /><span>~/assistant</span><span className="assistant-model">qwen-2.5-7b</span></h2>
         <div className="assistant-actions">
-          <button type="button" className="assistant-icon-button" onClick={reset} aria-label="New conversation" title="New conversation">â†»</button>
-          <button type="button" className="assistant-icon-button" onClick={() => setIsOpen(false)} aria-label="Collapse assistant" title="Collapse assistant">â‡¥</button>
+          <button type="button" className="assistant-icon-button" onClick={reset} aria-label="New conversation" title="New conversation"><Icon name="refresh" size={13} /></button>
+          <button type="button" className="assistant-icon-button" onClick={() => setIsOpen(false)} aria-label="Collapse assistant" title="Collapse assistant"><Icon name="chevronRight" size={14} /></button>
         </div>
       </header>
       <div ref={scrollRef} className="assistant-messages" aria-live="polite" aria-busy={isStreaming}>
         {!messages.length ? <div className="assistant-empty-state">
           <p><span className="accent-text">assistant</span> connected to this dashboard.</p>
           <p>It can see your focus list, assignment queue, open pull requests, and todayâ€™s forecast. Ask it to triage, plan, or explain anything on screen; concrete planning work is added to your focus list automatically.</p>
-          <div className="assistant-prompts">{suggestedPrompts.map((prompt) => <button key={prompt} type="button" onClick={() => send(prompt)}><span aria-hidden="true">&gt;</span>{prompt}</button>)}</div>
+          <div className="assistant-prompts">{suggestedPrompts.map((prompt) => <button key={prompt} type="button" onClick={() => send(prompt)}><Icon name="chevronRight" size={11} />{prompt}</button>)}</div>
         </div> : messages.map((message, index) => message.role === 'user' ? <div className="assistant-user-message" key={`${message.role}-${index}`}>{message.content}</div> : <div className="assistant-response" key={message.id}>
-          <button type="button" className="assistant-thinking-toggle" onClick={() => setThinkingOpen((value) => !value)} aria-expanded={thinkingOpen}><span aria-hidden="true">â€º</span>{message.phase === 'done' ? `Thought for ${message.thoughtSeconds || 1}s` : message.activity || 'Thinking'}</button>
+          <button type="button" className="assistant-thinking-toggle" onClick={() => setThinkingOpen((value) => !value)} aria-expanded={thinkingOpen}><Icon name="chevronRight" size={12} />{message.phase === 'done' ? `Thought for ${message.thoughtSeconds || 1}s` : message.activity || 'Thinking'}</button>
           {thinkingOpen && message.thinking ? <p className="assistant-thinking-copy">{message.thinking}</p> : null}
           {message.content ? <AssistantMarkdown text={message.content} /> : null}
         </div>)}
@@ -142,10 +143,10 @@ export default function ChatBar({ tasks, assignments, onCreateTasks }) {
         <span className="assistant-prompt-mark" aria-hidden="true">&gt;</span>
         <label className="visually-hidden" htmlFor="assistant-input">Ask the assistant</label>
         <input id="assistant-input" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="ask about your day..." />
-        {isStreaming ? <button type="button" className="assistant-send" onClick={stop} aria-label="Stop generating">â– </button> : <button type="submit" className="assistant-send" disabled={!draft.trim()} aria-label="Send message">â†¥</button>}
+        {isStreaming ? <button type="button" className="assistant-send" onClick={stop} aria-label="Stop generating"><Icon name="stop" size={11} /></button> : <button type="submit" className="assistant-send" disabled={!draft.trim()} aria-label="Send message"><Icon name="send" size={12} /></button>}
       </form>
       <p className="assistant-hint">enter to send Â· shift+enter for newline Â· reads your focus list, courses, repos &amp; forecast</p>
-    </> : <button type="button" className="assistant-collapsed" onClick={() => setIsOpen(true)} aria-label="Open assistant" aria-expanded="false"><span aria-hidden="true">â‡¥</span><span>assistant</span>{isStreaming ? <i aria-hidden="true" /> : null}</button>}
+    </> : <button type="button" className="assistant-collapsed" onClick={() => setIsOpen(true)} aria-label="Open assistant" aria-expanded="false"><Icon name="chevronRight" size={14} /><span>assistant</span>{isStreaming ? <i aria-hidden="true" /> : null}</button>}
   </aside>
 }
 

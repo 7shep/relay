@@ -10,15 +10,14 @@ const seedTasks = [
   { id: 't5', label: 'Morning inbox + standup notes', project: 'admin', estimate: '20m', due: '2026-08-31', description: 'Clear the highest-signal messages and capture anything that should become a task later.', timeline: ['Scan unread messages', 'Capture follow-ups', 'Write the standup update'], done: true },
 ]
 
-const assignments = [
-  { id: 'a1', course: 'CS-441', title: 'Distributed consensus write-up', kind: 'essay', dueInHours: 6, weight: '15%' },
-  { id: 'a2', course: 'MATH-312', title: 'Problem set 7 - eigenspaces', kind: 'problem set', dueInHours: 21, weight: '8%' },
-  { id: 'a3', course: 'CS-330', title: 'Lab 4: cache simulator', kind: 'lab', dueInHours: 54, weight: '10%' },
-  { id: 'a4', course: 'PHIL-210', title: 'Reading response - Nagel', kind: 'reading', dueInHours: 96, weight: '5%' },
-  { id: 'a5', course: 'MATH-312', title: 'Midterm exam', kind: 'exam', dueInHours: 168, weight: '30%' },
-]
-
 const FOCUS_STATE_KEY = 'start.focus.state'
+const ASSIGNMENTS_STATE_KEY = 'start.assignments'
+const GOOGLE_CALENDAR_CONFIG_KEY = 'start.google-calendar.config'
+const GOOGLE_CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar.readonly'
+const GOOGLE_IDENTITY_SCRIPT = 'https://accounts.google.com/gsi/client'
+const SCHOOLWORK_PATTERN = /assignment|midterm|exam|quiz|test|project|paper|essay|lab|homework|presentation|report/i
+
+let googleIdentityServicesPromise
 
 function dayKey(date) {
   return [date.getFullYear(), String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0')].join('-')
@@ -36,6 +35,126 @@ function readFocusState(date) {
   }
 }
 
+function readAssignments() {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(ASSIGNMENTS_STATE_KEY))
+    if (!Array.isArray(saved)) return []
+    return saved.map((item, index) => ({
+      id: String(item?.id || `assignment-${index}`),
+      course: String(item?.course || '').trim(),
+      title: String(item?.title || '').trim(),
+      kind: String(item?.kind || 'assignment').trim(),
+      dueInHours: item?.dueInHours !== undefined && item?.dueInHours !== null && item?.dueInHours !== '' && Number.isFinite(Number(item.dueInHours)) ? Number(item.dueInHours) : null,
+      dueAt: String(item?.dueAt || '').trim(),
+      weight: String(item?.weight || '').trim(),
+    })).filter((item) => item.title)
+  } catch {
+    return []
+  }
+}
+
+function readGoogleCalendarConfig() {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(GOOGLE_CALENDAR_CONFIG_KEY))
+    return { clientId: String(saved?.clientId || '').trim() }
+  } catch {
+    return { clientId: '' }
+  }
+}
+
+function loadGoogleIdentityServices() {
+  if (window.google?.accounts?.oauth2) return Promise.resolve()
+  if (googleIdentityServicesPromise) return googleIdentityServicesPromise
+  googleIdentityServicesPromise = new Promise((resolve, reject) => {
+    const existing = document.querySelector(`script[src="${GOOGLE_IDENTITY_SCRIPT}"]`)
+    if (existing) {
+      existing.addEventListener('load', resolve, { once: true })
+      existing.addEventListener('error', () => reject(new Error('Google sign-in could not load.')), { once: true })
+      return
+    }
+    const script = document.createElement('script')
+    script.src = GOOGLE_IDENTITY_SCRIPT
+    script.async = true
+    script.onload = resolve
+    script.onerror = () => reject(new Error('Google sign-in could not load.'))
+    document.head.appendChild(script)
+  })
+  return googleIdentityServicesPromise
+}
+
+async function requestGoogleAccessToken(clientId) {
+  await loadGoogleIdentityServices()
+  return new Promise((resolve, reject) => {
+    const client = window.google.accounts.oauth2.initTokenClient({
+      client_id: clientId,
+      scope: GOOGLE_CALENDAR_SCOPE,
+      callback: (response) => {
+        if (response.error) reject(new Error(response.error_description || 'Google Calendar authorization failed.'))
+        else resolve(response.access_token)
+      },
+      error_callback: () => reject(new Error('Google Calendar authorization was cancelled.')),
+    })
+    client.requestAccessToken()
+  })
+}
+
+async function googleCalendarJson(url, accessToken) {
+  const response = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } })
+  if (!response.ok) {
+    if (response.status === 401) throw new Error('Google Calendar authorization expired. Connect again to refresh it.')
+    throw new Error(`Google Calendar returned ${response.status}.`)
+  }
+  return response.json()
+}
+
+function eventStart(event) {
+  return event.start?.dateTime || event.start?.date || ''
+}
+
+function formatCalendarDue(event, start) {
+  if (event.start?.date) {
+    return new Intl.DateTimeFormat('en-CA', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${start}T00:00:00Z`)).toLowerCase()
+  }
+  return new Intl.DateTimeFormat('en-CA', { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(start)).toLowerCase()
+}
+
+function normalizeCalendarEvent(event, calendar, now) {
+  const start = eventStart(event)
+  const dueDate = event.start?.date ? new Date(`${start}T00:00:00Z`) : new Date(start)
+  if (!start || Number.isNaN(dueDate.getTime())) return null
+  const title = String(event.summary || '').trim()
+  if (!title || !SCHOOLWORK_PATTERN.test(title)) return null
+  const dueInHours = Math.max(0, Math.round((dueDate.getTime() - now.getTime()) / 3600000))
+  const kind = /midterm|exam|quiz|test/i.test(title) ? 'exam' : 'assignment'
+  return {
+    id: `google-${calendar.id}-${event.id}`,
+    course: calendar.summary || 'Google Calendar',
+    title,
+    kind,
+    dueInHours,
+    dueAt: formatCalendarDue(event, start),
+    weight: '',
+  }
+}
+
+async function loadGoogleCalendarAssignments(accessToken, now) {
+  const calendarData = await googleCalendarJson('https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=100', accessToken)
+  const timeMin = now.toISOString()
+  const timeMax = new Date(now.getTime() + 45 * 24 * 3600000).toISOString()
+  const calendars = calendarData.items || []
+  const eventPages = await Promise.all(calendars.map((calendar) => {
+    const params = new URLSearchParams({
+      singleEvents: 'true',
+      orderBy: 'startTime',
+      timeMin,
+      timeMax,
+      maxResults: '100',
+    })
+    return googleCalendarJson(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendar.id)}/events?${params}`, accessToken)
+      .then((data) => (data.items || []).map((event) => normalizeCalendarEvent(event, calendar, now)).filter(Boolean))
+  }))
+  return eventPages.flat().sort((a, b) => a.dueInHours - b.dueInHours)
+}
 function extractJson(text) {
   const cleaned = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')
   const start = cleaned.indexOf('[')
@@ -279,6 +398,9 @@ function App() {
   const [tasks, setTasks] = useState(() => focusState.tasks)
   const [focusDay, setFocusDay] = useState(() => focusState.day)
   const [focusStatus, setFocusStatus] = useState(() => focusState.shouldDraft ? 'planning' : 'ready')
+  const [assignments, setAssignments] = useState(readAssignments)
+  const [calendarConfig, setCalendarConfig] = useState(readGoogleCalendarConfig)
+  const [calendarState, setCalendarState] = useState({ status: 'idle', error: '' })
   const [showCompleted, setShowCompleted] = useState(true)
   const [selectedTask, setSelectedTask] = useState(null)
   const [weather, setWeather] = useState(fallbackWeather)
@@ -318,6 +440,15 @@ function App() {
   }, [tasks, focusDay])
 
   useEffect(() => {
+    assignmentsRef.current = assignments
+    try {
+      window.localStorage.setItem(ASSIGNMENTS_STATE_KEY, JSON.stringify(assignments))
+    } catch {
+      // Assignment data still remains available for this session when storage is unavailable.
+    }
+  }, [assignments])
+
+  useEffect(() => {
     if (focusState.shouldDraft) runFocusDraft(focusState.day, tasksRef.current)
     return () => draftControllerRef.current?.abort()
   }, [focusState, runFocusDraft])
@@ -333,6 +464,31 @@ function App() {
     setSelectedTask((current) => current && current.done ? null : current)
     runFocusDraft(today, carriedTasks)
   }, [now, runFocusDraft])
+
+  const connectGoogleCalendar = useCallback(async (clientId) => {
+    const normalizedClientId = clientId.trim()
+    if (!normalizedClientId) return
+    setCalendarState({ status: 'connecting', error: '' })
+    try {
+      const accessToken = await requestGoogleAccessToken(normalizedClientId)
+      const importedAssignments = await loadGoogleCalendarAssignments(accessToken, now)
+      const nextConfig = { clientId: normalizedClientId }
+      window.localStorage.setItem(GOOGLE_CALENDAR_CONFIG_KEY, JSON.stringify(nextConfig))
+      setCalendarConfig(nextConfig)
+      setAssignments(importedAssignments)
+      setCalendarState({ status: 'connected', error: '' })
+    } catch (error) {
+      if (error.name !== 'AbortError') setCalendarState({ status: 'error', error: error.message })
+    }
+  }, [now])
+
+  const disconnectGoogleCalendar = useCallback(() => {
+    window.localStorage.removeItem(GOOGLE_CALENDAR_CONFIG_KEY)
+    window.localStorage.removeItem(ASSIGNMENTS_STATE_KEY)
+    setCalendarConfig({ clientId: '' })
+    setAssignments([])
+    setCalendarState({ status: 'idle', error: '' })
+  }, [])
 
   useEffect(() => {
     if (!selectedTask) return undefined
@@ -419,7 +575,7 @@ function App() {
 
           <div className="side-stack">
             <WeatherPanel index={1} weather={weather} weatherStatus={weatherStatus} />
-            <AssignmentsPanel now={now} index={2} />
+            <AssignmentsPanel now={now} assignments={assignments} index={2} calendarState={calendarState} clientId={calendarConfig.clientId} onConnect={connectGoogleCalendar} onDisconnect={disconnectGoogleCalendar} />
           </div>
 
           <PullRequestsPanel index={3} />
@@ -731,11 +887,52 @@ function WeatherPanel({ index, weather, weatherStatus }) {
   </Panel>
 }
 
-function AssignmentsPanel({ now, index }) {
+/*
+function LegacyAssignmentsPanel({ now, index }) {
   const soon = assignments.filter((item) => item.dueInHours <= 24).length
   return <Panel path="~/edu/assignments" index={index} className="assignments-panel" meta={<span>{assignments.length} queued <b className="danger-text">· {soon} due &lt;24h</b></span>}>
     <ol className="assignment-list"><span className="assignment-line" aria-hidden="true" />{assignments.map((item) => <li key={item.id}><span className={`assignment-dot ${item.dueInHours <= 12 ? 'danger-dot' : item.dueInHours <= 48 ? 'warn-dot' : ''}`} aria-hidden="true" /><div><div className="assignment-title"><strong>{item.title}</strong><span className={item.dueInHours <= 12 ? 'danger-text' : item.dueInHours <= 48 ? 'warn-text' : ''}>{dueLabel(item.dueInHours)}</span></div><small>{item.course} · {item.kind} · {item.weight} of grade · due {dueClock(item.dueInHours, now)}</small></div></li>)}</ol>
+*/
+function AssignmentsPanel({ now, assignments, index, calendarState, clientId, onConnect, onDisconnect }) {
+  const soon = assignments.filter((item) => Number.isFinite(item.dueInHours) && item.dueInHours <= 24).length
+  const meta = assignments.length ? <span>{assignments.length} queued <b className="danger-text">· {soon} due &lt;24h</b></span> : calendarState.status === 'connected' ? <span>google calendar · 0 matches</span> : null
+  return <Panel path="~/edu/assignments" index={index} className="assignments-panel" meta={meta}>
+    {assignments.length ? <ol className="assignment-list"><span className="assignment-line" aria-hidden="true" />{assignments.map((item) => {
+      const dueHours = Number.isFinite(item.dueInHours) ? item.dueInHours : null
+      const dueText = item.dueAt || (dueHours === null ? 'date not set' : dueClock(dueHours, now))
+      return <li key={item.id}><span className={`assignment-dot ${dueHours !== null && dueHours <= 12 ? 'danger-dot' : dueHours !== null && dueHours <= 48 ? 'warn-dot' : ''}`} aria-hidden="true" /><div><div className="assignment-title"><strong>{item.title}</strong><span className={dueHours !== null && dueHours <= 12 ? 'danger-text' : dueHours !== null && dueHours <= 48 ? 'warn-text' : ''}>{dueHours === null ? '—' : dueLabel(dueHours)}</span></div><small>{[item.course, item.kind, item.weight && `${item.weight} of grade`, `due ${dueText}`].filter(Boolean).join(' · ')}</small></div></li>
+    })}</ol> : <GoogleCalendarSetup clientId={clientId} state={calendarState} onConnect={onConnect} onDisconnect={onDisconnect} />}
   </Panel>
+}
+
+function GoogleCalendarSetup({ clientId, state, onConnect, onDisconnect }) {
+  const [draftClientId, setDraftClientId] = useState(clientId)
+  const [isEditing, setIsEditing] = useState(!clientId)
+
+  useEffect(() => {
+    setDraftClientId(clientId)
+    setIsEditing(!clientId)
+  }, [clientId])
+
+  function submit(event) {
+    event.preventDefault()
+    onConnect(draftClientId)
+    setIsEditing(false)
+  }
+
+  if (state.status === 'connecting') return <div className="assignment-empty"><strong>Connecting Google Calendar...</strong><small>Approve calendar read access in the Google sign-in window.</small></div>
+
+  if (state.status === 'error') return <div className="assignment-empty calendar-error"><strong>Google Calendar could not sync.</strong><small>{state.error}</small><div className="calendar-actions"><button type="button" className="calendar-action" onClick={() => setIsEditing(true)}>edit client ID</button>{clientId ? <button type="button" className="calendar-action" onClick={() => onConnect(clientId)}>retry</button> : null}</div>{isEditing ? <CalendarClientIdForm value={draftClientId} onChange={setDraftClientId} onSubmit={submit} /> : null}</div>
+
+  if (!isEditing && clientId && state.status === 'connected') return <div className="assignment-empty"><strong>No upcoming schoolwork found.</strong><small>Google Calendar is connected. Sync events titled assignment, midterm, exam, quiz, test, project, paper, lab, or report.</small><div className="calendar-actions"><button type="button" className="calendar-action" onClick={() => onConnect(clientId)}>sync again</button><button type="button" className="calendar-action" onClick={onDisconnect}>disconnect</button></div></div>
+
+  if (!isEditing && clientId) return <div className="assignment-empty"><strong>Google Calendar is ready to sync.</strong><small>Your client ID is saved locally. Connect to import upcoming assignments and midterms.</small><div className="calendar-actions"><button type="button" className="calendar-connect" onClick={() => onConnect(clientId)}>connect Google Calendar <span aria-hidden="true">↗</span></button><button type="button" className="calendar-action" onClick={() => setIsEditing(true)}>edit client ID</button></div></div>
+
+  return <div className="assignment-empty"><strong>Connect Google Calendar.</strong><small>Import upcoming assignments and midterms so Qwen can draft your focus tasks.</small><CalendarClientIdForm value={draftClientId} onChange={setDraftClientId} onSubmit={submit} /></div>
+}
+
+function CalendarClientIdForm({ value, onChange, onSubmit }) {
+  return <form className="calendar-setup" onSubmit={onSubmit}><label><span>Google OAuth client ID</span><input value={value} onChange={(event) => onChange(event.target.value)} placeholder="123...apps.googleusercontent.com" autoComplete="off" required /></label><button type="submit" className="calendar-connect">connect Google Calendar <span aria-hidden="true">↗</span></button><small>Use a Web application client ID with this app&apos;s local URL as an authorized origin.</small><a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noreferrer">create a client ID in Google Cloud ↗</a></form>
 }
 
 function PullRequestsPanel({ index }) {

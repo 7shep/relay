@@ -406,6 +406,7 @@ function App() {
   const [weather, setWeather] = useState(fallbackWeather)
   const [weatherStatus, setWeatherStatus] = useState('locating')
   const tasksRef = useRef(tasks)
+  const assignmentsRef = useRef(assignments)
   const lastFocusDayRef = useRef(focusState.day)
   const draftControllerRef = useRef(null)
 
@@ -416,12 +417,16 @@ function App() {
 
   const runFocusDraft = useCallback(async (day, carriedTasks) => {
     draftControllerRef.current?.abort()
+    if (!assignmentsRef.current.length) {
+      setFocusStatus('no-data')
+      return
+    }
     const controller = new AbortController()
     draftControllerRef.current = controller
     setFocusStatus('planning')
 
     try {
-      const draftedTasks = await draftFocusTasks(day, carriedTasks, controller.signal)
+      const draftedTasks = await draftFocusTasks(day, carriedTasks, assignmentsRef.current, controller.signal)
       if (controller.signal.aborted || lastFocusDayRef.current !== day) return
       setTasks((current) => [...current, ...draftedTasks])
       setFocusStatus(draftedTasks.length ? 'ready' : 'offline')

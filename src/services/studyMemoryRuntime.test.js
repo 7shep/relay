@@ -15,6 +15,7 @@ import {
   proposeSaveSession,
   readStudyMemory,
   sessionBundleFilename,
+  sessionBundlePath,
   validateSessionBundle,
 } from './studyMemoryRuntime.js'
 
@@ -127,8 +128,9 @@ describe('study memory bridge contract', () => {
     expect(buildCourseContext(memory, 'cs-441').activeStruggles[0]).toMatchObject({ evidence: 'Reviewed: needed one hint once.', revisionOf: original.id })
   })
 
-  it('normalizes the manual export filename for the root study-sessions directory', () => {
-    expect(sessionBundleFilename({ courseCode: 'CISC301', sessionDate: '02/09/26' })).toBe('CISC301-SESSION-02-09-26.json')
+  it('organizes manual exports by class in the root study-sessions directory', () => {
+    expect(sessionBundleFilename({ courseCode: 'CISC301', sessionDate: '02/09/26' })).toBe('CISC301-session-02-09-26.json')
+    expect(sessionBundlePath({ courseCode: 'CISC301', sessionDate: '02/09/26' })).toBe('study-sessions/CISC301/CISC301-session-02-09-26.json')
   })
 
   it('refreshes the tutor profile across all courses every third committed session', async () => {

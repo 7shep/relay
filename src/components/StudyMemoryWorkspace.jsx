@@ -18,7 +18,6 @@ import {
   proposeSaveSession,
   readStudyMemory,
   saveJsonToStudySessions,
-  sessionBundleFilename,
   validateSessionBundle,
   writeStudyMemory,
 } from '../services/studyMemoryRuntime.js'
@@ -123,8 +122,7 @@ export default function StudyMemoryWorkspace({ assignments = [], onBack }) {
   async function exportBundle() {
     if (!proposal?.bundle) return
     try {
-      const filename = sessionBundleFilename(proposal.bundle)
-      const result = await saveJsonToStudySessions(filename, proposal.bundle)
+      const result = await saveJsonToStudySessions(proposal.bundle, proposal.bundle)
       showNotice(`${result.path} ${result.mode === 'filesystem' ? 'saved' : 'downloaded'} · nothing was committed`)
     } catch (exportError) { showError(exportError.message) }
   }

@@ -14,11 +14,11 @@ ChatGPT remains the study surface. This skill is only a session compiler: it cre
 6. Show the raw-session destination, derived learner-record diff, confidence, and missing-data warnings before proposing a save.
 7. If the authenticated Relay bridge is available, call `propose_save_session` with this exact bundle. A proposal is not a write.
 8. Only describe the session as saved after Relay returns a committed operation. ChatGPT cannot call `commit_operation` for the MVP.
-9. If the bridge is unavailable or the user declines, write/provide this same bundle as a manual-import JSON package in the repository root's `study-sessions/` directory.
+9. If the bridge is unavailable or the user declines, write/provide this same bundle as a manual-import JSON package in the repository root's class folder under `study-sessions/`.
 
 ## Output file
 
-The JSON file must be saved at `study-sessions/CLASS-SESSION-DATE.json`. Use the class code in uppercase and the date supplied for the session, for example `study-sessions/CISC301-SESSION-02-09-26.json`. The requested human form `CISC301-SESSION-02/09/26` is represented with hyphens because `/` is not a valid filename character on Windows. Keep the original date in the JSON field used by the bundle schema; only the filename is normalized for the filesystem.
+The JSON file must be saved at `study-sessions/CLASS/CLASS-session-DATE.json`. Create one uppercase class-code folder for every course, for example `study-sessions/CISC202/CISC202-session-2026-09-02.json`. Use the date supplied for the session; replace `/` or `\\` with `-` in the filename because path separators are not valid filename characters. Keep the original date in the JSON field used by the bundle schema; only the filesystem path is normalized.
 
 ## Output contract
 

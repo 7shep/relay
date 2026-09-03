@@ -387,27 +387,38 @@ export function downloadJson(filename, value) {
   URL.revokeObjectURL(url)
 }
 
-export function sessionBundleFilename(bundle) {
-  const course = String(bundle?.courseCode || bundle?.courseId || 'CLASS').replace(/[^a-z0-9]+/gi, '').toUpperCase()
-  const date = String(bundle?.sessionDate || 'DATE').trim().replace(/[\\/]/g, '-').replace(/[^a-z0-9-]/gi, '')
-  return `${course}-SESSION-${date || 'DATE'}.json`
+export function sessionBundleClass(bundle) {
+  return String(bundle?.courseCode || bundle?.courseId || 'CLASS').replace(/[^a-z0-9]+/gi, '').toUpperCase() || 'CLASS'
 }
 
-export async function saveJsonToStudySessions(filename, value) {
+export function sessionBundleFilename(bundle) {
+  const course = sessionBundleClass(bundle)
+  const date = String(bundle?.sessionDate || 'DATE').trim().replace(/[\\/]/g, '-').replace(/[^a-z0-9-]/gi, '')
+  return `${course}-session-${date || 'DATE'}.json`
+}
+
+export function sessionBundlePath(bundle) {
+  return `study-sessions/${sessionBundleClass(bundle)}/${sessionBundleFilename(bundle)}`
+}
+
+export async function saveJsonToStudySessions(bundle, value) {
+  const filename = sessionBundleFilename(bundle)
+  const path = sessionBundlePath(bundle)
   if (typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function') {
     const rootHandle = await window.showDirectoryPicker({ mode: 'readwrite' })
     const sessionDirectory = await rootHandle.getDirectoryHandle('study-sessions', { create: true })
-    const fileHandle = await sessionDirectory.getFileHandle(filename, { create: true })
+    const classDirectory = await sessionDirectory.getDirectoryHandle(sessionBundleClass(bundle), { create: true })
+    const fileHandle = await classDirectory.getFileHandle(filename, { create: true })
     const serialized = JSON.stringify(value, null, 2)
     const existing = await fileHandle.getFile()
     if (existing.size > 0 && (await existing.text()) !== serialized) throw new Error(`${filename} already exists; no file was overwritten`)
     const writable = await fileHandle.createWritable()
     await writable.write(serialized)
     await writable.close()
-    return { mode: 'filesystem', path: `study-sessions/${filename}` }
+    return { mode: 'filesystem', path }
   }
   downloadJson(filename, value)
-  return { mode: 'download', path: `study-sessions/${filename}` }
+  return { mode: 'download', path }
 }
 
 export async function pingStudyBridge({ endpoint, secret = '', signal } = {}) {

@@ -9,6 +9,8 @@ import {
   commitOperation,
   createSessionBundle,
   buildTutorProfile,
+  createLearnerProfileMarkdown,
+  createSessionMarkdown,
   proposeAssessmentEvidence,
   proposeLearnerMutation,
   proposeMaterialIngest,
@@ -19,6 +21,7 @@ import {
   validateCourseAnswer,
   sessionBundleFilename,
   sessionBundlePath,
+  obsidianSessionPath,
   validateSessionBundle,
 } from './studyMemoryRuntime.js'
 
@@ -54,13 +57,21 @@ describe('study memory bridge contract', () => {
     expect(validateSessionBundle({ ...bundle(), rawSession: { format: 'chat-export', content: '' } }).valid).toBe(false)
   })
 
+  it('migrates legacy browser graph state without claiming an Obsidian sync', () => {
+    const legacy = { ...readStudyMemory(), graph: { status: 'pending' } }
+    localStorage.setItem('relay.study-memory.v1', JSON.stringify(legacy))
+    const migrated = readStudyMemory()
+    expect(migrated.graph).toBeUndefined()
+    expect(migrated.vault).toMatchObject({ status: 'not configured' })
+  })
+
   it('does not change canonical memory while a save is only proposed', async () => {
     const memory = readStudyMemory()
     const operation = await proposeSaveSession(memory, bundle())
     const withProposal = addOperation(memory, operation)
     expect(withProposal.sessions).toHaveLength(0)
     expect(withProposal.operations[0]).toMatchObject({ type: 'save_session', status: 'proposed' })
-    expect(operation.destinationPaths).toEqual(expect.arrayContaining(['courses/CS-441/sessions/raw/session-test-01.json']))
+    expect(operation.destinationPaths).toEqual(expect.arrayContaining(['courses/CS-441/sessions/raw/session-test-01.txt', 'courses/CS-441/sessions/2026-09-02-hypothesis-testing-session-test-01.md']))
   })
 
   it('binds commit to a one-use approval token and preserves the raw artifact', async () => {
@@ -176,5 +187,28 @@ describe('study memory bridge contract', () => {
     expect(memory.skillState.tutor).toMatchObject({ sessionsCommitted: 3, profileVersion: 1 })
     expect(memory.tutorProfile.strengths).toContain('strength 3')
     expect(buildTutorProfile(memory).weaknesses).toContain('weakness 1')
+  })
+
+  it('renders an Obsidian session note with frontmatter and evidence links', () => {
+    const session = bundle({ topic: 'recursion', assignment: 'Lab 1', conceptsCovered: [{ name: 'base cases' }, { name: 'call stack' }], learningPreferencesObserved: [{ text: 'Examples before formal definitions', confidence: 0.81, sourceRef: 'message:19' }], recurringMistakesObserved: [{ text: 'Forgets the base case', confidence: 0.74, sourceRef: 'message:21' }] })
+    const note = createSessionMarkdown(session, { courseCode: 'CISC301' })
+    expect(note).toContain('type: study-session')
+    expect(note).toContain('course: CISC301')
+    expect(note).toContain('concepts: ["base cases", "call stack"]')
+    expect(note).toContain('confidence: ["72% — one observed repair"]')
+    expect(note).toContain('[[../concepts/base-cases]]')
+    expect(note).toContain('[[../assignments/lab-1]]')
+    expect(note).toContain('[[../../learner/recurring-mistakes]]')
+    expect(obsidianSessionPath(session, 'CISC301')).toContain('courses/CISC301/sessions/2026-09-02-recursion-session-test-01.md')
+  })
+
+  it('writes learner profile entries as revisable hypotheses with evidence', () => {
+    const profile = buildTutorProfile({ ...readStudyMemory(), sessions: [{ id: 's1' }], learnerClaims: [{ type: 'learning_preference', text: 'One hint at a time', confidence: 0.86, evidenceRefs: ['artifact-1'], status: 'hypothesis' }] })
+    const markdown = createLearnerProfileMarkdown(profile)
+    expect(markdown).toContain('status: hypotheses')
+    expect(markdown).toContain('### One hint at a time')
+    expect(markdown).toContain('Confidence: **86%**')
+    expect(markdown).toContain('Evidence: artifact-1')
+    expect(markdown).toContain('revisable hypotheses')
   })
 })

@@ -13,7 +13,9 @@ Begin by asking:
 
 > What topic are you studying? You can name the topic, or paste a practice question.
 
-If the learner supplies a course or level, use it. If not, ask for the minimum context needed to pitch the explanation well (usually course/level and the learner's goal), but do not make them complete a form before helping. If a Relay course is selected, load `get_course_context` and show only the relevant topic's strengths, active struggles, recent repairs, and suggested practice. Do not turn a missing or stale context response into a fact about the learner.
+If the learner supplies a course or level, use it. If not, ask for the minimum context needed to pitch the explanation well (usually course/level and the learner's goal), but do not make them complete a form before helping. If a Relay course is selected, load `get_course_context` with the relevant topic and show only that topic's strengths, active struggles, recent repairs, learning-preference hypotheses, recurring-mistake hypotheses, and suggested practice. Do not turn a missing, stale, or absent Obsidian context response into a fact about the learner.
+
+Treat the Obsidian learner notes as evidence, not identity labels. Apply a preference only as a testable teaching hypothesis: for example, try an example before a formal definition or give one hint at a time when the notes support it, then check whether the learner's performance improves. Keep the hypothesis stable while it is useful, but be ready to revise or supersede it when new session evidence disagrees.
 
 Classify the first substantive input as one of these modes:
 
@@ -82,3 +84,5 @@ Do not end immediately after an explanation or a correct answer. Re-test the ori
 - **Can now:** the skill they demonstrated, with the evidence from the session;
 - **Still needs practice:** the remaining uncertainty or condition that has not yet been demonstrated;
 - **Next rep:** one targeted problem or retrieval prompt.
+
+When a learner-profile hypothesis was applied, compare the re-test with the initial attempt. Say whether the adaptation appeared helpful, inconclusive, or unhelpful, and include that evidence in the next capture rather than upgrading the hypothesis automatically.

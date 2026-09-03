@@ -7,23 +7,25 @@ description: Compile the current study conversation into a source-linked session
 
 Use this skill explicitly at the end of a study conversation, for example: `capture this study session for CS-441`.
 
-ChatGPT remains the study surface. This skill is only a session compiler: it creates a proposal bundle for Relay and must never claim that a course folder, learner record, or Graphify was updated without a committed bridge response.
+ChatGPT remains the study surface. This skill is only a session compiler: it creates a proposal bundle for Relay and must never claim that an Obsidian vault, course note, or learner profile was updated without a committed bridge response.
 
 ## Procedure
 
 1. Identify the requested course and session date. Ask for either when missing; course IDs are lowercase slugs such as `cs-441`.
 2. Summarize only the active conversation and supplied course context. Do not infer an answer key, score, weakness, or future test topic that the evidence does not support.
-3. Separate concepts covered, strengths, struggles, successful repairs, question types, test signals, and unresolved questions.
+3. Separate concepts covered, strengths, struggles, successful repairs, observed learning preferences, recurring mistakes, adaptation results from any re-test, question types, test signals, and unresolved questions.
 4. Add exact message or artifact references whenever available. If a reference is unavailable, leave it absent and add a missing-data warning.
 5. Give each observation a provenance kind: `user_provided`, `extracted`, `inferred`, `estimated`, or `unresolved`. Include confidence and a short rationale when confidence is meaningful.
-6. Show the raw-session destination, derived learner-record diff, confidence, and missing-data warnings before proposing a save.
+6. Show the immutable raw-capture destination, readable Obsidian session-note destination, derived learner-record diff, confidence, and missing-data warnings before proposing a save.
 7. If the authenticated Relay bridge is available, call `propose_save_session` with this exact bundle. A proposal is not a write.
 8. Only describe the session as saved after Relay returns a committed operation. ChatGPT cannot call `commit_operation` for the MVP.
-9. If the bridge is unavailable or the user declines, write/provide this same bundle as a manual-import JSON package in the repository root's class folder under `study-sessions/`.
+9. If the bridge is unavailable or the user declines, write/provide an Obsidian-compatible Markdown note plus the same JSON bundle as an import-compatible fallback. Do not claim that the vault or learner profile changed until the user confirms a filesystem export or Relay reports a committed bridge response.
 
-## Output file
+## Obsidian output
 
-The JSON file must be saved at `study-sessions/CLASS/CLASS-session-DATE.json`. Create one uppercase class-code folder for every course, for example `study-sessions/CISC202/CISC202-session-2026-09-02.json`. Use the date supplied for the session; replace `/` or `\\` with `-` in the filename because path separators are not valid filename characters. Keep the original date in the JSON field used by the bundle schema; only the filesystem path is normalized.
+The readable note should be saved in the selected vault at `courses/CLASS/sessions/DATE-TOPIC-SESSION.md`, for example `courses/CISC202/sessions/2026-09-02-recursion-session-001.md`. Its frontmatter must include `type: study-session`, `course`, `topic`, `date`, `concepts`, `strengths`, `struggles`, `successful_repairs`, and `open_questions`. Preserve the original conversation separately under `courses/CLASS/sessions/raw/SESSION.txt`. Link the note to its course, concepts, assignment when known, and the root learner notes. A profile refresh is a derived proposal and remains a hypothesis record with evidence, confidence, and a reason to revisit.
+
+The JSON bundle remains accepted for manual import and interoperability at `study-sessions/CLASS/CLASS-session-DATE.json`. Use the date supplied for the session; replace `/` or `\\` with `-` in filenames because path separators are not valid filename characters.
 
 ## Output contract
 
@@ -35,11 +37,16 @@ Return valid JSON with no additional top-level fields unless a bridge explicitly
   "sessionId": "session-2026-09-02-001",
   "courseId": "cs-441",
   "sessionDate": "2026-09-02",
+  "topic": "recursion",
+  "assignment": "Lab 1",
   "rawSession": { "format": "chat-export", "content": "..." },
   "conceptsCovered": [],
   "strengthsObserved": [],
   "strugglesObserved": [],
   "successfulRepairs": [],
+  "learningPreferencesObserved": [],
+  "recurringMistakesObserved": [],
+  "adaptationResults": [],
   "questionTypes": [],
   "testSignals": [],
   "openQuestions": [],

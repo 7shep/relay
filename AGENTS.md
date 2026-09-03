@@ -30,7 +30,7 @@ npm run bridge
 - `src/App.jsx` owns top-level dashboard/workspace routing, focus-task state, assignment import, modal state, and service orchestration.
 - `src/components/` contains the dashboard panels, assistant docks, `StudyMemoryWorkspace`, retained academic workspace, modal, markdown renderer, shared panel shell, and project-owned icon set.
 - `src/styles/` contains the imported CSS surfaces. `index.css` imports dashboard, panels, assistant, modal, responsive, academic, and study-memory styles.
-- `src/services/` contains network/provider adapters and runtimes: local Qwen/Ollama, Luna bridge, weather/Open-Meteo, GitHub, syllabus/PDF extraction, academic runtime records, and `studyMemoryRuntime.js`.
+- `src/services/` contains network/provider adapters and runtimes: local Qwen/Ollama, Luna bridge, weather/Open-Meteo, GitHub, syllabus/PDF extraction, academic runtime records, `studyMemoryRuntime.js`, and the shared Obsidian Markdown renderer.
 - `src/utils/` contains local-storage helpers, date/formatting helpers, and JSON extraction.
 - `src/constants/` contains provider URLs/models, seeded task/weather data, and prompts.
 - `bridge/` contains the optional standard-library localhost bridge that owns the real `study-context/` folder.
@@ -45,7 +45,7 @@ npm run bridge
 - Session bundles follow schema version 1 and the `skills/capture-study-session/SKILL.md` contract. Manual exports use `study-sessions/CLASS/CLASS-session-DATE.json`; `/` in a human date is normalized to `-` for Windows filenames while the JSON keeps the original session date.
 - Tutor context is bounded to the selected course/topic even though the Tutor profile refresh is cross-course. Refresh strengths, weaknesses, improvements, unresolved questions, and practice suggestions only after every three newly committed sessions, and keep the refresh an explicit derived proposal.
 - Assignment guidance resolves a named assignment from the local context folder/manifest and must expose missing prompt, rubric, draft, material, or learner context instead of inventing it. It may guide and model answers but must not submit work, overwrite drafts, or silently save.
-- Graphify is optional. Its refresh state is derived from the canonical study-session evidence archive; Relay remains the canonical evidence reader and must not claim that Graphify changed without a committed adapter response.
+- Obsidian is the local Markdown evidence surface. Its learner-profile notes are derived from committed study-session evidence; Relay must not claim that the vault changed without a committed bridge response.
 - Qwen uses Ollama at `http://localhost:11434/api/chat` with model `qwen2.5:7b`. It handles operational planning, task capture, and syllabus extraction.
 - The academic provider is Luna 5.6 through `VITE_LUNA_BRIDGE_URL`. The browser talks to the local companion bridge; do not put Luna/Codex credentials in browser storage.
 - GitHub credentials are currently stored in local storage by the MVP. Treat this as sensitive and do not expand token exposure; the README identifies Windows keychain storage as a future Tauri improvement.

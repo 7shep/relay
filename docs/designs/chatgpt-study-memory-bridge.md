@@ -10,7 +10,7 @@ Mode: Builder
 
 Relay is a school-focused local app, but the actual learning happens in the ChatGPT app. The student uses ChatGPT and its study skills during real sessions, uploads course materials, and wants the useful evidence from that work to compound over time.
 
-The product should connect those two worlds without replacing ChatGPT as the study surface. Approved actions from ChatGPT should send session summaries, learner observations, uploaded syllabi, assignments, and past tests to a local companion bridge. The bridge stores the original evidence in a real course folder, creates structured learner records, and keeps a Graphify knowledge graph current.
+The product should connect those two worlds without replacing ChatGPT as the study surface. Approved actions from ChatGPT should send session summaries, learner observations, uploaded syllabi, assignments, and past tests to a local companion bridge. The bridge stores the original evidence in a real Obsidian-compatible vault, creates readable Markdown notes and structured learner hypotheses, and keeps the learner profile current through explicit derived refreshes.
 
 The primary ChatGPT-side entry point is a reusable `capture-study-session` skill. At the end of a study conversation, the skill summarizes the active chat into a strict, evidence-linked bundle, shows the proposed learner updates, and hands the proposal to the MCP bridge. If the bridge is unavailable, the skill must still produce a downloadable bundle for manual import.
 
@@ -22,21 +22,21 @@ The existing syllabus workflow remains compatible: uploading a supported syllabu
 
 The best version feels like a second layer of memory around ChatGPT. After a study session, ChatGPT can ask for approval to save what mattered: the concepts covered, the student's explanations, hints requested, mistakes repaired, unresolved uncertainty, and likely test-question patterns. The next session can begin with a compact, evidence-linked briefing instead of starting from zero.
 
-The graph is the visual payoff. A student can open a course and see connections between a lecture, an assignment, a past-test question, a misconception, a successful repair, and a predicted practice area. Selecting a weak concept should reveal the exact sessions and answers that produced that belief.
+The Markdown links are the navigable payoff. A student can open a course in Obsidian and move between a lecture, an assignment, a past-test question, a misconception, a successful repair, and a practice area. Selecting a weak concept should reveal the exact sessions and answers that produced that belief.
 
 ## Constraints
 
-- ChatGPT remains the primary study interface; Relay is the local bridge, archive, graph explorer, and review surface.
+- ChatGPT remains the primary study interface; Relay is the local bridge, archive, Obsidian export, and review surface.
 - Do not use the current Qwen/Luna academic agent setup as the product model or architectural baseline.
 - Preserve the current syllabus and assignment extraction behavior.
 - Originals must be stored in a real local folder owned by the student.
 - Derived learner claims must link back to source files or session records, remain editable, and be rebuildable.
 - Past tests must be first-class inputs, not merely opaque PDFs.
-- Writes from ChatGPT require explicit user approval. Saving a session, adding a learner signal, and updating a graph are separate auditable actions.
+- Writes from ChatGPT require explicit user approval. Saving a session, adding a learner signal, and refreshing a profile are separate auditable actions.
 - The system must distinguish user-provided facts, extracted facts, model inferences, estimates, and unresolved questions.
 - Privacy defaults to local storage. The bridge must not upload course material or learner history to a new hosted service.
-- The Graphify integration must be treated as an adapter. Public Graphify documentation describes folder-based graph generation, local graph files, and MCP access, but not a student-specific mastery model.
-- The first release is one course, manual or one-click session import, immutable artifact storage, one past-test question schema, proposed learner signals with approval, and existing syllabus compatibility. Automatic capture, future-test prediction, and a rich graph explorer are post-MVP.
+- Obsidian is the evidence store and Markdown is the durable interchange format. Obsidian should not be treated as the Tutor or as a student-specific mastery model.
+- The first release is one course, manual or one-click session import, immutable artifact storage, one past-test question schema, proposed learner signals with approval, and existing syllabus compatibility. Automatic capture, future-test prediction, and rich vault navigation are post-MVP.
 - ChatGPT's current custom MCP guidance says it connects to remote MCP servers, not directly to localhost; private or developer-machine servers require a secure tunnel. Full MCP write support is currently beta-limited to Business, Enterprise, and Edu on the web. See [OpenAI's MCP guidance](https://help.openai.com/en/articles/12584461). This makes the tunnel a validation gate and manual export/import the default MVP path until it succeeds.
 
 ## Premises
@@ -44,8 +44,8 @@ The graph is the visual payoff. A student can open a course and see connections 
 1. The source of truth is the student's ChatGPT study sessions, course materials, assignments, and past tests.
 2. Improving the student's skills means improving the learner model and study guidance, not silently editing ChatGPT skill files.
 3. Every imported session or document is preserved as a raw artifact in a real local course folder.
-4. Learner insights and graph data are derived, evidence-linked, rebuildable, and editable.
-5. Graphify is the graph, index, query, and visual layer; canonical evidence and learner records remain in the local folder.
+4. Learner insights and Markdown profile records are derived, evidence-linked, rebuildable, and editable.
+5. Obsidian exposes the local Markdown evidence; the Tutor skill interprets only bounded, relevant context. Canonical evidence remains in the vault.
 6. Past tests become structured evidence containing questions, topics, the student's answers, corrections, scores when available, and question patterns.
 7. The first usable release may require manual or one-click export/import. Automatic capture is a later integration milestone.
 
@@ -53,15 +53,15 @@ The graph is the visual payoff. A student can open a course and see connections 
 
 ### Approach A: Session compiler first
 
-Relay would accept exported ChatGPT sessions and school files, preserve them in a local folder, normalize them into learner records, and invoke Graphify to create the graph. This is the fastest way to prove whether the derived insights actually help the student. It was not selected as the primary direction because the intended daily experience starts inside ChatGPT.
+Relay would accept exported ChatGPT sessions and school files, preserve them in a local vault, normalize them into learner hypotheses, and generate linked Markdown notes. This is the fastest way to prove whether the derived insights actually help the student. It was not selected as the primary direction because the intended daily experience starts inside ChatGPT.
 
 ### Approach B: ChatGPT-to-folder MCP bridge
 
-Selected. A local companion service exposes narrowly scoped MCP tools that ChatGPT can call with approval: save a study session, ingest an assessment, record a learner signal, retrieve course context, and request a graph refresh. The service writes canonical files and structured records, then invokes or updates the Graphify adapter. Relay provides setup, folder status, import fallback, graph exploration, evidence inspection, correction, and deletion controls.
+Selected. A local companion service exposes narrowly scoped MCP tools that ChatGPT can call with approval: save a study session, ingest an assessment, record a learner signal, retrieve bounded course context, and propose a learner-profile refresh. The service writes canonical Markdown and immutable raw files. Relay provides setup, vault status, import fallback, evidence inspection, correction, and deletion controls.
 
 ### Approach C: Living course atlas
 
-Each course would become a highly curated folder of concept pages, mistake maps, test-pattern maps, session timelines, and Graphify outputs. This is the strongest visual experience, but it adds a large information-architecture and UI surface before the bridge and learner evidence loop are proven.
+Each course would become a highly curated Obsidian folder of concept pages, assignment pages, mistake links, session timelines, and learner-profile backlinks. This is the strongest writing and review experience, but it adds a large information-architecture and UI surface before the bridge and learner evidence loop are proven.
 
 ## Recommended Approach
 
@@ -82,7 +82,7 @@ The bridge should not attempt to mirror every ChatGPT message. It should receive
 7. call `propose_save_session` only after producing that preview;
 8. emit the same bundle as a downloadable/manual-import package when MCP is unavailable or the user declines the write.
 
-The skill must not claim that it updated Graphify unless the bridge returns a committed operation. It must not edit skill files, overwrite course material, or invent an answer key, score, learner weakness, or likely test topic.
+The skill must not claim that it updated the vault unless the bridge returns a committed operation. It must not edit skill files, overwrite course material, or invent an answer key, score, learner weakness, or likely test topic.
 
 The minimum skill output is:
 
@@ -113,7 +113,7 @@ The first release has three gates, in this order:
 
 1. `ping` and `get_course_context` prove that the ChatGPT-facing client can reach the bridge using the supported transport.
 2. `propose_save` returns a human-readable file and learner-record diff without changing the course folder.
-3. `commit_save` accepts only a short-lived approval token tied to the exact proposal, content hash, selected course, destination paths, and graph diff.
+3. `commit_save` accepts only a short-lived approval token tied to the exact proposal, content hash, selected course, destination paths, and Markdown/profile diff.
 es
 If the ChatGPT-to-remote-tunnel connection cannot pass gate 1, manual export/import is the first-release entry point. The rest of the file contract stays the same, so the product does not depend on an unverified hosted-client-to-loopback assumption.
 
@@ -129,7 +129,7 @@ The bridge protocol must define:
 - read-only, propose-only, and commit-capable tool classifications;
 - a `proposed -> approved -> writing -> committed|failed|cancelled` operation state machine.
 
-The bridge must be able to run without Graphify. It records the raw and structured files first, then marks graph refresh as pending or failed. A Graphify error must never make a successful evidence save appear to have failed.
+The bridge must be able to run with only the local filesystem. It records the raw capture and Markdown notes first, then marks a periodic learner-profile refresh as due, committed, or failed. A profile-refresh error must never make a successful evidence save appear to have failed.
 
 ### Approval protocol
 
@@ -143,46 +143,45 @@ For the MVP, ChatGPT can create proposals but cannot commit them. Relay's authen
 study-context/
   courses/
     CS-441/
-      course.yaml
       materials/
-        originals/
+        file-uploaded/
         extracted/
+      concepts/
       assignments/
       assessments/
         past-tests/
         question-records/
       sessions/
         raw/
-        summaries/
+        2026-09-03-recursion-session-001.md
       learner/
         signals/
-        profile.md
-        corrections.md
+          session-001-1.md
       operations/
         journal.jsonl
-      graphify-out/
-        graph.json
-        graph.html
-        GRAPH_REPORT.md
+  learner/
+    profile.md
+    learning-preferences.md
+    recurring-mistakes.md
 ```
 
-The exact names can change during implementation, but the separation matters: raw evidence is immutable, derived learner records are inspectable, and generated graph artifacts can be deleted and rebuilt.
+The exact names can change during implementation, but the separation matters: raw evidence is immutable, session notes and learner records are inspectable, and profile Markdown is derived, reviewable, and rebuildable.
 
 ### Bridge capabilities
 
-- `save_study_session`: save the raw export plus a structured summary after confirmation.
+- `save_study_session`: save the raw export plus a readable Markdown session note after confirmation.
 - `ingest_course_material`: preserve a syllabus, assignment, rubric, lecture file, or past test and return its artifact ID.
 - `record_assessment_evidence`: attach a question, answer, correction, score, concept, and source assessment.
 - `get_course_context`: return a bounded, source-linked briefing for the current study session.
-- `propose_learner_update`: show a proposed strength, struggle, misconception, or question-pattern update before writing it.
+- `propose_learner_update`: show a proposed strength, struggle, misconception, preference, or question-pattern update before writing it.
 - `correct_learner_record`: let the student accept, edit, downgrade, or delete a derived claim.
-- `refresh_graph`: rebuild or incrementally update Graphify output for the selected course.
+- `refresh_learner_profile`: propose or commit the periodic refresh of root learner Markdown notes.
 
 All tools should be scoped to one selected course and return source IDs, changed files, confidence, and whether the operation was only proposed or actually committed.
 
-The canonical tool table is: read-only `ping` and `get_course_context`; propose-only `propose_save_session`, `propose_ingest_material`, `propose_learner_update`, and `propose_delete`; commit-capable local-UI operation `commit_operation`; and separately scheduled `refresh_graph`. The proposal tools never write files. Course IDs use lowercase slugs such as `cs-441`; display labels such as `CS-441` are metadata only.
+The canonical tool table is: read-only `ping` and `get_course_context`; propose-only `propose_save_session`, `propose_ingest_material`, `propose_learner_update`, and `propose_delete`; commit-capable local-UI operation `commit_operation`; and a periodic derived `refresh_learner_profile`. The proposal tools never write files. Course IDs use lowercase slugs such as `cs-441`; display labels such as `CS-441` are metadata only.
 
-The normal capture sequence is `capture-study-session` skill -> `propose_save_session` -> user approval -> `commit_operation` -> pending or successful `refresh_graph`. The skill may call read-only context tools before summarizing. It may not bypass the proposal or commit stages.
+The normal capture sequence is `capture-study-session` skill -> `propose_save_session` -> user approval -> `commit_operation` -> readable Markdown note plus a profile refresh proposal when due. The skill may call read-only context tools before summarizing. It may not bypass the proposal or commit stages.
 
 ### Canonical records and provenance
 
@@ -209,7 +208,7 @@ The minimum session record is shaped like this:
 
 Learner claims must carry evidence references, confidence rationale, observation count, last-observed time, contradictory evidence when present, and a status such as `hypothesis`, `confirmed_by_user`, or `superseded`.
 
-Every derived record uses the same provenance envelope: `derivedFrom` artifact IDs, `runId`, `transformVersion`, `sourceLocator`, `inputHashes`, `outputHash`, provenance kind (`user_provided`, `extracted`, `inferred`, `estimated`, or `unresolved`), and confidence rationale. This makes a learner claim, assignment record, and graph export traceable to the same source chain.
+Every derived record uses the same provenance envelope: `derivedFrom` artifact IDs, `runId`, `transformVersion`, `sourceLocator`, `inputHashes`, `outputHash`, provenance kind (`user_provided`, `extracted`, `inferred`, `estimated`, or `unresolved`), and confidence rationale. This makes a learner claim, assignment record, and Markdown profile entry traceable to the same source chain.
 
 ### Learner evidence model
 
@@ -251,15 +250,13 @@ Separate the assessment, the attempt, and each question so that a PDF can remain
 
 Missing answer keys, images, equations, scores, or uncertain concept mappings must be represented as missing or uncertain fields. They must not be invented by the parser.
 
-### Graph model
+### Obsidian and Markdown model
 
-The Graphify adapter should be tested against a pinned version and a fixture before it becomes a required dependency. Graphify is guaranteed only the capabilities verified in that fixture: consuming the folder, producing its documented output, and exposing whatever query or visualization paths survive with provenance intact. Relay owns learner-domain IDs, claim status, confidence calculations, and source links unless the fixture proves Graphify can preserve them.
+Obsidian is the local evidence surface, not the Tutor. Each committed study session produces a readable Markdown note with frontmatter for `type`, `course`, `topic`, `date`, `concepts`, `strengths`, `struggles`, `successful_repairs`, `open_questions`, provenance, and confidence. The note links to the course hub, concept notes, an assignment when known, the immutable raw capture, and the learner notes.
 
-Relay also owns a small intermediate graph contract with stable node IDs, typed edges, provenance references, confidence, and stale/failed-refresh status. The adapter maps this contract into Graphify inputs and records a capability matrix for node types, edge types, provenance, incremental updates, deletion, and stale output. If Graphify cannot preserve a capability, Relay remains the canonical reader and Graphify is only an optional visualization/query consumer.
+Learner profile entries are hypotheses. Each entry records its status, confidence, evidence references, and a condition that should trigger review. Examples include “examples before formal definitions are effective,” “one hint at a time helps,” or “unit checks prevent repeated calculation errors.” The system must not convert these observations into permanent learning-style labels.
 
-When supported, Graphify should receive ordinary local files that describe typed entities and relationships. Useful nodes include courses, concepts, materials, assignments, tests, test questions, study sessions, learner signals, strengths, struggles, and practice recommendations. Useful edges include `covers`, `tests`, `answered_in`, `exposes_gap`, `repaired_by`, `supports`, `contradicts`, and `likely_relevant_to`.
-
-Every inferred edge should carry confidence and an explanation. The Relay graph view should make it possible to move from a high-level learner claim back to the exact session, question, answer, or correction supporting it.
+The root `learner/profile.md`, `learning-preferences.md`, and `recurring-mistakes.md` notes are derived and periodically refreshed from committed session evidence. A profile refresh is visible in the proposal diff and is rebuildable from the session and signal notes. Topic context remains bounded: Tutor receives only the selected course/topic's relevant strengths, struggles, repairs, preferences, mistakes, and practice suggestions.
 
 ### Compatibility with existing uploads
 
@@ -273,8 +270,8 @@ The compatibility adapter must leave the current parser, Qwen extraction, dashbo
 - What session export shape can ChatGPT reliably produce from a study conversation, and how should incomplete or malformed exports be handled?
 - What skill surface and trigger are available in the user's ChatGPT environment, and can the skill receive or reference the complete active conversation?
 - Should the bridge run as a local HTTP service, a native desktop process, or a packaged companion executable?
-- Which Graphify invocation and semantic-extraction configuration best handles transcripts, PDFs, and structured learner records?
-- **MVP blocker:** Does Graphify's current output support the required learner-domain nodes and provenance directly, or should Relay maintain a small domain graph that Graphify visualizes?
+- How should the Markdown profile refresh balance useful adaptation with avoiding overfitting to a single session?
+- **MVP blocker:** Can the Obsidian note links and bounded course-context response preserve enough provenance for Tutor adaptation without a separate graph service?
 - How should the system represent “likely to show up on a test” so it is useful without pretending to know the instructor's exam?
 - What exact confirmation UX is needed before saving sensitive session content or updating a learner claim?
 - How should course folders be backed up, encrypted, moved, and deleted?
@@ -287,23 +284,23 @@ The first question is now specifically a secure-tunnel, plan, workspace-permissi
 - No automatic capture of every ChatGPT message.
 - No silent mutation of ChatGPT skills, course files, or learner claims.
 - No authoritative exam prediction or simulated instructor grade.
-- No requirement that Graphify calculate mastery or own canonical learner records.
+- No permanent learner-style labels or requirement that Obsidian calculate mastery.
 - No multi-course recommendation engine until one-course evidence retrieval is useful.
-- No claim that a session was saved or Graphify was updated when the skill only produced a bundle.
+- No claim that a session was saved or the vault was updated when the skill only produced a bundle.
 
 ## Reviewer Concerns Preserved
 
 - ChatGPT-to-bridge writes remain conditional on OpenAI plan, web-surface, workspace permissions, and secure-tunnel support. Manual export/import is the approved fallback.
-- The Graphify adapter must prove its capabilities against a pinned version before graph output becomes required. Relay's intermediate graph contract remains canonical.
+- The Obsidian writer must prove immutable raw capture, safe paths, deterministic frontmatter, source links, duplicate handling, and rebuildable profile output before the vault becomes a trusted Tutor input.
 - Local security, backup, encryption, tunnel logs, and deletion semantics require an implementation threat-model pass before handling a full personal archive.
-- The MVP intentionally defers automatic capture, rich graph navigation, multi-course recommendations, and authoritative test predictions.
+- The MVP intentionally defers automatic capture, rich vault navigation, multi-course recommendations, and authoritative test predictions.
 
 ## Success Criteria
 
 ### MVP
 
 - A bridge `ping` succeeds through the selected transport, or the manual export/import fallback is documented and usable.
-- An approved save request creates a raw session file and structured summary in one selected local course folder.
+- An approved save request creates an immutable raw capture, a readable Markdown session note, linked course/concept/assignment notes, and source-linked learner-signal notes in one selected local vault.
 - `capture-study-session` produces a valid schema-versioned bundle for three real study sessions and clearly reports missing or uncertain evidence.
 - The skill's proposal preview shows learner-record changes before any write, and manual bundle export works when MCP is unavailable.
 - A course can contain syllabi, assignments, one past-test format, session exports, and learner evidence without losing original files.
@@ -311,19 +308,19 @@ The first question is now specifically a secure-tunnel, plan, workspace-permissi
 - A past test can be represented as individual questions linked to concepts, answers, corrections, scores, and question types.
 - A learner claim shows source evidence, confidence, provenance, and correction/delete controls.
 - Failed, cancelled, duplicate, and partially completed bridge operations are visible and retryable.
-- No learner record or graph update is written without a bridge-enforced approval token.
+- No learner record or profile update is written without a bridge-enforced approval token.
 
 ### Post-MVP
 
 - A next-session context request returns a bounded briefing containing strengths, active struggles, recent repairs, and suggested practice, with links back to source artifacts.
-- A graph refresh produces a readable interactive view and allows navigation from a learner claim to supporting evidence.
+- A profile refresh produces readable learner Markdown with hypotheses, evidence, confidence, and revisit conditions.
 - Automatic ChatGPT capture, multi-course recommendations, and evidence-weighted test-pattern predictions are added only after the MVP fixture shows reliable source links.
 
 ## Distribution Plan
 
-During research, Relay remains the existing local browser app run with `npm run dev`. The bridge should be a separately launchable local companion with a documented setup command and a health indicator in Relay. The first release can require Python/Graphify installation and a configured local bridge; packaging the bridge as a Windows executable is a later usability milestone.
+During research, Relay remains the existing local browser app run with `npm run dev`. The bridge should be a separately launchable local companion with a documented setup command and a health indicator in Relay. The first release can require a configured local Obsidian vault and bridge; packaging the bridge as a Windows executable is a later usability milestone.
 
-The repository should document the bridge contract, local folder permissions, Graphify setup, backup/delete behavior, and the manual export/import fallback. A future CI pipeline can run schema tests and bridge contract tests; it should never upload real course folders or learner data.
+The repository should document the bridge contract, local vault permissions, Obsidian setup, backup/delete behavior, profile rebuild behavior, and the manual export/import fallback. A future CI pipeline can run schema tests and bridge contract tests; it should never upload real course folders or learner data.
 
 ## Next Steps
 
@@ -332,19 +329,19 @@ The repository should document the bridge contract, local folder permissions, Gr
 3. Run a hello-world bridge spike: authenticated `ping`, `get_course_context`, and one approval-gated proposal through the intended ChatGPT transport.
 4. Define the local folder manifest, immutable artifact records, operation journal, and artifact IDs for one course, one assignment, and two past tests.
 5. Build the no-model local bridge with proposal tokens, commit states, retry, duplicate, cancellation, and delete/tombstone behavior.
-6. Run the Graphify adapter fixture on the course folder and record exactly which learner nodes, provenance, IDs, and interactive outputs survive.
+6. Run the Obsidian fixture on the course folder and record exactly which frontmatter, links, provenance, IDs, hypotheses, and profile revisions survive.
 7. Add the existing syllabus importer as a bridge producer without changing its assignment extraction behavior, then run the compatibility matrix.
-8. Test the learner-evidence fixture for honest strengths, struggles, repairs, and test signals before adding automatic capture or a richer graph UI.
+8. Test the learner-evidence fixture for honest strengths, struggles, repairs, and test signals before adding automatic capture or richer vault navigation.
 9. Decide whether a packaged Windows companion is warranted after the skill, boundary, and one-course MVP are proven.
 
 ## The Assignment
 
-Bring one real course folder, two past tests, one assignment, and three study-session exports. Redact names and private details if needed. Run `capture-study-session` on each session, then mark one thing you understood, one thing you struggled with, one question you got wrong or needed help on, and one correction that actually stuck. This will define the first evidence schema and reveal whether the resulting graph describes your learning or merely decorates your files.
+Bring one real course folder, two past tests, one assignment, and three study-session exports. Redact names and private details if needed. Run `capture-study-session` on each session, then mark one thing you understood, one thing you struggled with, one question you got wrong or needed help on, and one correction that actually stuck. This will define the first evidence schema and reveal whether the resulting Markdown profile improves your studying or merely decorates your files.
 
 ## What I noticed about how you think
 
 - You were specific that studying happens “in the ChatGPT app,” so the product boundary follows your real behavior instead of forcing you into a new study interface.
 - You corrected the framing directly: “do not treat the current agent setup as a baseline.” That makes the existing dashboard a compatibility surface, not the source of product direction.
 - You kept returning to evidence over time: “what I'm good at, what I'm bad at, where I struggle, where I'm good.” The learner model should therefore show history and proof, not just a current score.
-- You called the graph a bonus, which suggests the useful outcome is better future studying; the graph earns its place by making the learning history understandable.
-- You proposed the sharper front door yourself: “make a skill to summarize a chat and update the graphify.” That turns the product from a passive archive into a repeatable end-of-session ritual.
+- You called visual navigation a bonus, which suggests the useful outcome is better future studying; the durable Markdown evidence earns its place by making the learning history understandable.
+- You proposed the sharper front door yourself: “make a skill to summarize a chat and update the archive.” That turns the product from a passive archive into a repeatable end-of-session ritual.

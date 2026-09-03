@@ -11,6 +11,8 @@
 
 - Keep extracted text, derived assignment metadata, manifests, and archive operation states linked to their source files.
 - Enforce authenticated, approval-bound bridge writes with upload limits, duplicate detection, safe course paths, and a manual browser-based fallback.
+- Replace the optional graph refresh surface with an Obsidian-compatible Markdown vault containing linked session, concept, assignment, signal, and learner-profile notes.
+- Record learning preferences, recurring mistakes, adaptation checks, evidence links, confidence, and revisit conditions as hypotheses rather than permanent labels.
 
 ## 0.2.0 - 2026-09-02
 

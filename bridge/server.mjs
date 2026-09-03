@@ -2,6 +2,23 @@ import { createHash, randomBytes } from 'node:crypto'
 import { appendFile, link, mkdir, readFile, readdir, stat, lstat, writeFile, unlink } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { dirname, extname, join, relative, resolve, sep } from 'node:path'
+import {
+  createAssignmentMarkdown,
+  createConceptMarkdown,
+  createCourseMarkdown,
+  createLearnerProfileMarkdown,
+  createLearnerSignalMarkdown,
+  createLearningPreferencesMarkdown,
+  createRecurringMistakesMarkdown,
+  createSessionMarkdown,
+  obsidianAssignmentPath,
+  obsidianConceptPath,
+  obsidianCourseFolder,
+  obsidianRawSessionPath,
+  obsidianSessionFilename,
+  obsidianSessionPath,
+  obsidianSignalPath,
+} from '../src/services/studyMemoryMarkdown.js'
 
 const port = Number(process.env.RELAY_BRIDGE_PORT || 4112)
 const root = resolve(process.env.RELAY_STUDY_ROOT || 'study-context')
@@ -93,6 +110,25 @@ async function assertSafePath(courseId, relativePath) {
   return target
 }
 
+async function assertSafeRootPath(relativePath) {
+  if (!relativePath || relativePath.includes('\0') || relativePath.startsWith('/') || /^[A-Za-z]:[\\/]/.test(relativePath) || relativePath.split(/[\\/]/).includes('..')) throw new Error('destination path is outside the vault allowlist')
+  const target = resolve(root, relativePath)
+  const rel = relative(root, target)
+  if (rel.startsWith(`..${sep}`) || rel === '..' || rel.includes(`..${sep}`)) throw new Error('destination path is outside the vault allowlist')
+  let current = root
+  for (const piece of rel.split(/[\\/]/).filter(Boolean)) {
+    current = join(current, piece)
+    try {
+      const info = await lstat(current)
+      if (info.isSymbolicLink()) throw new Error('symlinks/reparse points are not allowed in vault paths')
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error
+      break
+    }
+  }
+  return target
+}
+
 function hash(value) {
   return createHash('sha256').update(value).digest('hex')
 }
@@ -115,20 +151,39 @@ async function journal(courseId, entry) {
   await appendFile(path, `${JSON.stringify({ at: new Date().toISOString(), ...entry })}\n`, 'utf8')
 }
 
-async function courseContext(courseId) {
+function parseSignalMarkdown(content) {
+  const frontmatter = content.match(/^---\n([\s\S]*?)\n---/)
+  if (!frontmatter) return null
+  const fields = Object.fromEntries(frontmatter[1].split('\n').map((line) => line.match(/^([a-z_]+):\s*(.*)$/)).filter(Boolean).map(([, key, value]) => [key, value.replace(/^"|"$/g, '')]))
+  const hypothesis = content.match(/\*\*Hypothesis:\*\*\s*(.+)/)?.[1]?.trim() || ''
+  return { type: fields.claim_type, status: fields.status || 'hypothesis', confidence: fields.confidence === 'null' ? null : Number(fields.confidence), sourceRef: fields.source_ref || null, sessionId: fields.session_id || null, topic: fields.topic || '', text: hypothesis }
+}
+
+async function readSignalClaims(courseId) {
   const signalsPath = await assertSafePath(courseId, 'learner/signals')
   let names = []
   try { names = await readdir(signalsPath) } catch (error) { if (error.code !== 'ENOENT') throw error }
   const claims = []
-  for (const name of names.slice(-50)) {
-    if (extname(name) !== '.json') continue
+  for (const name of names.slice(-100)) {
     try {
       const signalPath = await assertSafePath(courseId, `learner/signals/${name}`)
-      claims.push(JSON.parse(await readFile(signalPath, 'utf8')))
+      const content = await readFile(signalPath, 'utf8')
+      if (extname(name) === '.json') claims.push(JSON.parse(content))
+      if (extname(name) === '.md') {
+        const parsed = parseSignalMarkdown(content)
+        if (parsed) claims.push(parsed)
+      }
     } catch { /* malformed or escaped evidence remains on disk but is not trusted */ }
   }
+  return claims
+}
+
+async function courseContext(courseId, topic = '') {
+  assertCourse(courseId)
+  const claims = await readSignalClaims(courseId)
   const normalizedClaims = claims.map((item) => ({ ...(item.claim && typeof item.claim === 'object' ? item.claim : item), sessionId: item.sessionId, sourceRef: item.sourceRef, evidenceRefs: item.evidenceRefs || (item.sourceRef ? [item.sourceRef] : []) }))
-  return { courseId, strengths: normalizedClaims.filter((item) => item.type === 'strength' && item.status !== 'superseded'), activeStruggles: normalizedClaims.filter((item) => item.type === 'struggle' && item.status !== 'superseded'), recentRepairs: normalizedClaims.filter((item) => item.type === 'repair' && item.status !== 'superseded'), suggestedPractice: [], sourceSessionIds: [...new Set(normalizedClaims.map((item) => item.sessionId).filter(Boolean))] }
+  const relevant = topic ? normalizedClaims.filter((item) => !item.topic || String(item.topic).toLowerCase() === String(topic).toLowerCase() || String(item.text || '').toLowerCase().includes(String(topic).toLowerCase())) : normalizedClaims
+  return { courseId, topic, strengths: relevant.filter((item) => item.type === 'strength' && item.status !== 'superseded'), activeStruggles: relevant.filter((item) => item.type === 'struggle' && item.status !== 'superseded'), recentRepairs: relevant.filter((item) => item.type === 'repair' && item.status !== 'superseded').slice(-5).reverse(), learningPreferences: relevant.filter((item) => item.type === 'learning_preference' && item.status !== 'superseded'), recurringMistakes: relevant.filter((item) => ['recurring_mistake', 'struggle'].includes(item.type) && item.status !== 'superseded'), suggestedPractice: [], sourceSessionIds: [...new Set(relevant.map((item) => item.sessionId).filter(Boolean))], vault: { format: 'obsidian-markdown', sessionPath: obsidianSessionPath({ sessionDate: 'DATE', sessionId: 'SESSION' }, courseId), profilePaths: ['learner/profile.md', 'learner/learning-preferences.md', 'learner/recurring-mistakes.md'] } }
 }
 
 async function commitMaterial(operation, token) {
@@ -173,28 +228,130 @@ async function commitMaterial(operation, token) {
   }
 }
 
+function claimRecords(bundle) {
+  const groups = [
+    ['strength', bundle.strengthsObserved],
+    ['struggle', bundle.strugglesObserved],
+    ['repair', bundle.successfulRepairs],
+    ['learning_preference', bundle.learningPreferencesObserved],
+    ['recurring_mistake', bundle.recurringMistakesObserved],
+    ['question_pattern', bundle.questionTypes],
+    ['test_signal', bundle.testSignals],
+  ]
+  return groups.flatMap(([type, values]) => (Array.isArray(values) ? values : []).map((value) => ({ ...(value && typeof value === 'object' ? value : { text: value }), type, courseId: bundle.courseId, sessionId: bundle.sessionId, topic: bundle.topic || '', provenance: value?.provenance || bundle.provenance || 'inferred', sourceRef: value?.sourceRef || bundle.evidenceRefs?.[0] || `session:${bundle.sessionId}`, confidence: Number(value?.confidence ?? bundle.confidence?.[0]?.value ?? 0.5), status: 'hypothesis' })))
+}
+
+function unique(values) {
+  return [...new Set(values.map((value) => String(value || '').trim()).filter(Boolean))].slice(0, 12)
+}
+
+function buildVaultProfile(claims, sessionCount = 0) {
+  const active = claims.filter((item) => item.status !== 'superseded')
+  return {
+    strengths: unique(active.filter((item) => item.type === 'strength').map((item) => item.text || item.evidence || item.name)),
+    weaknesses: unique(active.filter((item) => item.type === 'struggle').map((item) => item.text || item.evidence || item.name)),
+    improvements: unique(active.filter((item) => item.type === 'repair').map((item) => item.text || item.evidence || item.name)),
+    learningPreferences: unique(active.filter((item) => item.type === 'learning_preference').map((item) => item.text || item.evidence || item.name)),
+    recurringMistakes: unique(active.filter((item) => ['recurring_mistake', 'struggle'].includes(item.type)).map((item) => item.text || item.evidence || item.name)),
+    hypotheses: active.map((item) => ({ type: item.type, text: item.text || item.evidence || item.name, status: item.status || 'hypothesis', confidence: item.confidence ?? null, evidenceRefs: item.evidenceRefs || [item.sourceRef].filter(Boolean), sourceSessionId: item.sessionId || null, revisitWhen: item.revisitWhen || 'Revisit with a new session or transfer task.' })),
+    basedOnSessionCount: sessionCount || new Set(active.map((item) => item.sessionId).filter(Boolean)).size,
+    updatedAt: new Date().toISOString(),
+  }
+}
+
+async function allVaultClaims() {
+  const coursesPath = resolve(root, 'courses')
+  let folders = []
+  try { folders = await readdir(coursesPath, { withFileTypes: true }) } catch (error) { if (error.code !== 'ENOENT') throw error }
+  const claims = []
+  for (const folder of folders.filter((item) => item.isDirectory())) {
+    const courseId = slug(folder.name)
+    if (!courseId) continue
+    claims.push(...await readSignalClaims(courseId))
+  }
+  return claims
+}
+
+async function existingVaultSessionCount() {
+  const coursesPath = resolve(root, 'courses')
+  let folders = []
+  try { folders = await readdir(coursesPath, { withFileTypes: true }) } catch (error) { if (error.code !== 'ENOENT') throw error }
+  let count = 0
+  for (const folder of folders.filter((item) => item.isDirectory())) {
+    const courseId = slug(folder.name)
+    if (!courseId) continue
+    const sessionsPath = await assertSafePath(courseId, 'sessions')
+    let names = []
+    try { names = await readdir(sessionsPath) } catch (error) { if (error.code !== 'ENOENT') throw error }
+    count += names.filter((name) => extname(name) === '.md').length
+  }
+  return count
+}
+
+async function writeObsidianFiles(files) {
+  const resolved = []
+  for (const file of files) {
+    const path = file.root ? await assertSafeRootPath(file.relativePath) : await assertSafePath(file.courseId, file.relativePath)
+    let current = null
+    try { current = await readFile(path, 'utf8') } catch (error) { if (error.code !== 'ENOENT') throw error }
+    if (current != null && current !== file.content && !file.ignoreIfDifferent && !file.replace) throw new Error(`${file.relativePath} already exists with different content; no files were overwritten`)
+    resolved.push({ ...file, path, exists: current != null, same: current === file.content })
+  }
+  for (const file of resolved) {
+    if (file.same || (file.exists && file.ignoreIfDifferent)) continue
+    await mkdir(dirname(file.path), { recursive: true })
+    await writeFile(file.path, file.content, file.replace ? 'utf8' : { flag: 'wx', encoding: 'utf8' })
+  }
+}
+
+async function commitSession(operation, token) {
+  if (!tokenMatches(operation, token)) throw new Error('approval token is missing, expired, reused, or does not match the proposal')
+  operation.status = 'writing'; operation.approvalToken.used = true
+  try {
+    const bundle = operation.bundle
+    const courseCode = obsidianCourseFolder(operation.courseId)
+    const rawRelativePath = obsidianRawSessionPath(bundle, courseCode).replace(`courses/${courseCode}/`, '')
+    const noteRelativePath = obsidianSessionPath(bundle, courseCode).replace(`courses/${courseCode}/`, '')
+    const noteFilename = obsidianSessionFilename(bundle)
+    const rawPath = await assertSafePath(operation.courseId, rawRelativePath)
+  try { await stat(rawPath); operation.status = 'failed'; operation.reason = 'duplicate artifact retained; no files were overwritten'; operation.completedAt = new Date().toISOString(); return operation } catch (error) { if (error.code !== 'ENOENT') throw error }
+  const records = claimRecords(bundle)
+  const files = [
+    { courseId: operation.courseId, relativePath: rawRelativePath, content: bundle.rawSession.content },
+    { courseId: operation.courseId, relativePath: noteRelativePath, content: createSessionMarkdown(bundle, { courseCode }) },
+    { courseId: operation.courseId, relativePath: 'index.md', content: createCourseMarkdown(courseCode), ignoreIfDifferent: true },
+  ]
+  const concepts = [...new Set((bundle.conceptsCovered || []).map((item) => typeof item === 'string' ? item : item?.name).filter(Boolean))]
+  concepts.forEach((topic) => files.push({ courseId: operation.courseId, relativePath: obsidianConceptPath(courseCode, topic).replace(`courses/${courseCode}/`, ''), content: createConceptMarkdown(courseCode, topic, noteFilename), ignoreIfDifferent: true }))
+  const assignment = bundle.assignment || bundle.assignmentId
+  if (assignment) files.push({ courseId: operation.courseId, relativePath: obsidianAssignmentPath(courseCode, assignment).replace(`courses/${courseCode}/`, ''), content: createAssignmentMarkdown(courseCode, assignment, noteFilename), ignoreIfDifferent: true })
+  records.forEach((claim, index) => files.push({ courseId: operation.courseId, relativePath: obsidianSignalPath(courseCode, bundle.sessionId, index).replace(`courses/${courseCode}/`, ''), content: createLearnerSignalMarkdown(claim, { courseCode }) }))
+  const sessionCount = await existingVaultSessionCount()
+  const profileRefresh = (sessionCount + 1) % 3 === 0
+  if (profileRefresh) {
+    const profile = buildVaultProfile([...(await allVaultClaims()), ...records], sessionCount + 1)
+    files.push({ root: true, relativePath: 'learner/profile.md', content: createLearnerProfileMarkdown(profile), replace: true })
+    files.push({ root: true, relativePath: 'learner/learning-preferences.md', content: createLearningPreferencesMarkdown(profile), replace: true })
+    files.push({ root: true, relativePath: 'learner/recurring-mistakes.md', content: createRecurringMistakesMarkdown(profile), replace: true })
+  }
+  try {
+    await writeObsidianFiles(files)
+  } catch (error) {
+    operation.status = 'failed'; operation.reason = `vault write failed: ${error.message}`; operation.completedAt = new Date().toISOString(); return operation
+  }
+  operation.status = 'committed'; operation.completedAt = new Date().toISOString(); operation.result = { rawPath: relative(root, rawPath).split(sep).join('/'), sessionNotePath: relative(root, await assertSafePath(operation.courseId, noteRelativePath)).split(sep).join('/'), profileRefresh: profileRefresh ? 'committed' : 'not due' }
+  await journal(operation.courseId, { operationId: operation.id, type: operation.type, status: operation.status, contentHash: operation.contentHash, sessionNotePath: operation.result.sessionNotePath, profileRefresh: operation.result.profileRefresh })
+    return operation
+  } catch (error) {
+    operation.status = 'failed'; operation.reason = `vault write failed: ${error.message}`; operation.completedAt = new Date().toISOString(); return operation
+  }
+}
+
 async function commit(operation, token) {
   return withCourseLock(operation.courseId, async () => {
     if (operation.type === 'ingest_course_material') return commitMaterial(operation, token)
-    if (!tokenMatches(operation, token)) throw new Error('approval token is missing, expired, reused, or does not match the proposal')
-    operation.status = 'writing'; operation.approvalToken.used = true
-    if (operation.type !== 'save_session') throw new Error('Unsupported operation type')
-    const bundle = operation.bundle
-    const rawPath = await assertSafePath(operation.courseId, `sessions/raw/${bundle.sessionId}.json`)
-    const summaryPath = await assertSafePath(operation.courseId, `sessions/summaries/${bundle.sessionId}.json`)
-    try { await stat(rawPath); operation.status = 'failed'; operation.reason = 'duplicate artifact retained; no files were overwritten'; return operation } catch (error) { if (error.code !== 'ENOENT') throw error }
-    await mkdir(dirname(rawPath), { recursive: true }); await mkdir(dirname(summaryPath), { recursive: true })
-    await writeFile(rawPath, bundle.rawSession.content, 'utf8')
-    await writeFile(summaryPath, JSON.stringify(bundle, null, 2), 'utf8')
-    const claims = [...(bundle.strengthsObserved || []), ...(bundle.strugglesObserved || []), ...(bundle.successfulRepairs || [])]
-    for (let index = 0; index < claims.length; index += 1) {
-      const signalPath = await assertSafePath(operation.courseId, `learner/signals/${bundle.sessionId}-${index + 1}.json`)
-      await mkdir(dirname(signalPath), { recursive: true })
-      await writeFile(signalPath, JSON.stringify({ schemaVersion: 1, sessionId: bundle.sessionId, courseId: operation.courseId, claim: claims[index], provenance: bundle.provenance, sourceRef: bundle.evidenceRefs?.[0] || null }, null, 2), 'utf8')
-    }
-    operation.status = 'committed'; operation.completedAt = new Date().toISOString(); operation.result = { rawPath: relative(root, rawPath), graphRefresh: 'pending' }
-    await journal(operation.courseId, { operationId: operation.id, type: operation.type, status: operation.status, contentHash: operation.contentHash, graphRefresh: 'pending' })
-    return operation
+    if (operation.type === 'save_session') return commitSession(operation, token)
+    throw new Error('Unsupported operation type')
   })
 }
 
@@ -214,19 +371,26 @@ async function handle(request, response) {
   if (request.method === 'OPTIONS') return json(response, 204, {})
   const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`)
   try {
-    if (url.pathname === '/ping' && request.method === 'GET') return json(response, 200, { service: 'relay-study-bridge', protocolVersion: 1, status: 'ready', root: root, writesRequireApproval: true })
+    if (url.pathname === '/ping' && request.method === 'GET') return json(response, 200, { service: 'relay-study-bridge', protocolVersion: 2, status: 'ready', storage: 'obsidian-markdown', root: root, writesRequireApproval: true })
     if (url.pathname === '/course_context' && request.method === 'GET') {
       if (!authorized(request)) return json(response, 401, { error: 'authentication required' })
-      return json(response, 200, await courseContext(url.searchParams.get('courseId')))
+      return json(response, 200, await courseContext(url.searchParams.get('courseId'), url.searchParams.get('topic') || ''))
     }
     if (!authorized(request, true)) return json(response, 401, { error: 'authenticated bridge request required' })
     if (url.pathname === '/propose_save_session' && request.method === 'POST') {
-      const payload = await body(request); const bundle = payload.bundle
-      const requiredArrays = ['conceptsCovered', 'strengthsObserved', 'strugglesObserved', 'successfulRepairs', 'questionTypes', 'testSignals', 'openQuestions', 'evidenceRefs', 'confidence']
+      const payload = await body(request); const bundle = { learningPreferencesObserved: [], recurringMistakesObserved: [], adaptationResults: [], ...(payload.bundle || {}) }
+      const requiredArrays = ['conceptsCovered', 'strengthsObserved', 'strugglesObserved', 'successfulRepairs', 'learningPreferencesObserved', 'recurringMistakesObserved', 'adaptationResults', 'questionTypes', 'testSignals', 'openQuestions', 'evidenceRefs', 'confidence']
       if (bundle?.schemaVersion !== 1 || !bundle.sessionId || !bundle.courseId || !bundle.rawSession?.content || requiredArrays.some((key) => !Array.isArray(bundle[key]))) throw new Error('invalid schema-versioned session bundle')
       assertCourse(bundle.courseId)
       const rawHash = hash(bundle.rawSession.content)
-      const operation = { id: `operation-${Date.now()}-${randomBytes(4).toString('hex')}`, type: 'save_session', status: 'proposed', courseId: bundle.courseId, sessionId: bundle.sessionId, contentHash: rawHash, destinationPaths: [`courses/${bundle.courseId.toUpperCase()}/sessions/raw/${bundle.sessionId}.json`, `courses/${bundle.courseId.toUpperCase()}/sessions/summaries/${bundle.sessionId}.json`], diff: payload.diff || { learnerClaims: [], warnings: [] }, bundle, idempotencyKey: request.headers['idempotency-key'] || `${bundle.courseId}:${rawHash}`, createdAt: new Date().toISOString() }
+      const courseCode = obsidianCourseFolder(bundle.courseId)
+      const claimCount = ['strengthsObserved', 'strugglesObserved', 'successfulRepairs', 'learningPreferencesObserved', 'recurringMistakesObserved', 'questionTypes', 'testSignals'].reduce((count, key) => count + bundle[key].length, 0)
+      const profileRefresh = (await existingVaultSessionCount() + 1) % 3 === 0
+      const destinationPaths = [obsidianRawSessionPath(bundle, courseCode), obsidianSessionPath(bundle, courseCode), `courses/${courseCode}/operations/journal.jsonl`, ...Array.from({ length: claimCount }, (_, index) => obsidianSignalPath(courseCode, bundle.sessionId, index))]
+      if (profileRefresh) destinationPaths.push('learner/profile.md', 'learner/learning-preferences.md', 'learner/recurring-mistakes.md')
+      if (bundle.topic) destinationPaths.push(obsidianConceptPath(courseCode, bundle.topic))
+      if (bundle.assignment || bundle.assignmentId) destinationPaths.push(obsidianAssignmentPath(courseCode, bundle.assignment || bundle.assignmentId))
+      const operation = { id: `operation-${Date.now()}-${randomBytes(4).toString('hex')}`, type: 'save_session', status: 'proposed', courseId: bundle.courseId, sessionId: bundle.sessionId, contentHash: rawHash, destinationPaths, diff: { ...(payload.diff || { learnerClaims: [], warnings: [] }), profileRefresh }, bundle, idempotencyKey: request.headers['idempotency-key'] || `${bundle.courseId}:${rawHash}`, createdAt: new Date().toISOString() }
       proposals.set(operation.id, operation); return json(response, 200, operation)
     }
     if (url.pathname === '/propose_ingest_material' && request.method === 'POST') {

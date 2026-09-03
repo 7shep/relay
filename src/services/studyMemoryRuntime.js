@@ -1,6 +1,7 @@
 const STUDY_MEMORY_KEY = 'relay.study-memory.v1'
 export const STUDY_MEMORY_SCHEMA_VERSION = 1
 export const OPERATION_STATES = ['proposed', 'approved', 'writing', 'committed', 'failed', 'cancelled']
+export const MATERIAL_UPLOAD_DIRECTORY = 'materials/file-uploaded'
 
 const nowIso = () => new Date().toISOString()
 
@@ -8,8 +9,56 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value))
 }
 
-function slug(value) {
+export function normalizeCourseId(value) {
   return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+}
+
+function slug(value) {
+  return normalizeCourseId(value)
+}
+
+export function safeMaterialFilename(value) {
+  const original = String(value || '').normalize('NFKC').split(/[\\/]/).pop().trim()
+  const cleaned = original
+    .replace(/[\u0000-\u001f\u007f<>:"|?*]/g, '_')
+    .replace(/\s+/g, ' ')
+    .replace(/^\.+$/, '')
+    .slice(0, 180)
+    .trim()
+  return cleaned || 'uploaded-material'
+}
+
+export function normalizeCourseRoute(value = {}) {
+  const courseId = normalizeCourseId(value.courseId || value.course || value.code)
+  const courseLabel = String(value.courseLabel || value.courseName || value.label || '').trim()
+  const confidence = Number(value.confidence)
+  const hasConfidence = Number.isFinite(confidence)
+  const evidence = String(value.evidence || '').trim()
+  const needsClassName = value.needsClassName === true || !courseId || !hasConfidence || confidence < 0.7 || !evidence
+  return {
+    courseId: needsClassName ? '' : courseId,
+    courseLabel,
+    confidence: hasConfidence ? Math.max(0, Math.min(1, confidence)) : null,
+    evidence,
+    needsClassName,
+  }
+}
+
+export function validateCourseAnswer(value) {
+  const label = String(value || '').trim()
+  const courseId = normalizeCourseId(label)
+  const invalid = !courseId || courseId.length < 2 || ['class', 'course', 'unknown', 'school'].includes(courseId)
+  return { valid: !invalid, courseId: invalid ? '' : courseId, courseLabel: label }
+}
+
+export function courseFromRoute(memory, route) {
+  const normalized = normalizeCourseRoute(route)
+  if (normalized.needsClassName) return { memory, course: null, route: normalized }
+  const existing = memory.courses.find((item) => item.id === normalized.courseId)
+  if (existing) return { memory, course: existing, route: normalized }
+  const label = normalized.courseLabel || normalized.courseId.toUpperCase()
+  const created = { id: normalized.courseId, code: label.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toUpperCase() || normalized.courseId.toUpperCase(), name: normalized.courseLabel || 'Imported course', term: '', color: 'green' }
+  return { memory: { ...memory, courses: [...memory.courses, created] }, course: created, route: normalized }
 }
 
 function id(prefix) {
@@ -25,14 +74,26 @@ function fallbackHash(value) {
   return `fnv1a-${(hash >>> 0).toString(16).padStart(8, '0')}`
 }
 
+function decodeBase64(value) {
+  const encoded = String(value || '').replace(/^data:[^;]+;base64,/, '')
+  if (typeof atob === 'function') {
+    const binary = atob(encoded)
+    return Uint8Array.from(binary, (character) => character.charCodeAt(0))
+  }
+  return encoded
+}
+
 export async function contentHash(value) {
+  const bytes = value instanceof ArrayBuffer ? new Uint8Array(value) : value instanceof Uint8Array ? value : null
   const text = typeof value === 'string' ? value : JSON.stringify(value)
   if (globalThis.crypto?.subtle && typeof TextEncoder !== 'undefined') {
-    const bytes = new TextEncoder().encode(text)
-    const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes)
+    const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes || new TextEncoder().encode(text))
     return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
   }
-  return fallbackHash(text)
+  if (!bytes) return fallbackHash(text)
+  let binary = ''
+  for (let index = 0; index < bytes.length; index += 1) binary += String.fromCharCode(bytes[index])
+  return fallbackHash(binary)
 }
 
 function stable(value) {
@@ -45,6 +106,7 @@ const seedMemory = {
   courses: [{ id: 'cs-441', code: 'CS-441', name: 'Applied Machine Learning', term: 'fall 2026', color: 'green' }],
   assignments: [],
   artifacts: [],
+  materialManifest: [],
   sessions: [],
   assessments: [],
   questionEvidence: [],
@@ -62,7 +124,7 @@ function validMemory(value) {
 export function readStudyMemory(existingAssignments = []) {
   try {
     const saved = JSON.parse(localStorage.getItem(STUDY_MEMORY_KEY))
-    if (validMemory(saved)) return { ...saved, skillState: saved.skillState || clone(seedMemory.skillState), tutorProfile: saved.tutorProfile || clone(seedMemory.tutorProfile) }
+    if (validMemory(saved)) return { ...saved, materialManifest: saved.materialManifest || [], skillState: saved.skillState || clone(seedMemory.skillState), tutorProfile: saved.tutorProfile || clone(seedMemory.tutorProfile) }
   } catch {
     // A browser storage failure should never block manual capture.
   }
@@ -284,24 +346,29 @@ export function addOperation(memory, operation) {
   return { ...memory, operations: [...memory.operations, operation] }
 }
 
-export async function proposeMaterialIngest(memory, { courseId, name, sourceType = 'course material', originalContent, extractedText = '' }) {
-  const course = memory.courses.find((item) => item.id === courseId)
-  if (!course) throw new Error(`Unknown course: ${courseId}`)
-  if (!name || !originalContent) throw new Error('A material filename and original content are required')
-  const hash = await contentHash(originalContent)
+export async function proposeMaterialIngest(memory, { courseId, name, sourceType = 'course material', originalContent, originalBytesBase64 = '', byteLength = null, extractedText = '', assignmentId = null, derivedAssignments = [], parseStatus = 'parsed', sourceHash = '' }) {
+  const normalizedCourseId = normalizeCourseId(courseId)
+  const course = memory.courses.find((item) => item.id === normalizedCourseId)
+  if (!course) throw new Error(`Unknown course: ${normalizedCourseId}`)
+  if (!name || (originalContent == null && !originalBytesBase64)) throw new Error('A material filename and original content are required')
+  const hash = sourceHash || await contentHash(originalBytesBase64 ? decodeBase64(originalBytesBase64) : originalContent)
   const artifactId = id('artifact')
+  const safeName = safeMaterialFilename(name)
   const root = `courses/${course.code}`
+  const materialPath = `${root}/${MATERIAL_UPLOAD_DIRECTORY}/${safeName}`
+  const extractedPath = `${root}/materials/extracted/${artifactId}.txt`
+  const assignmentPath = `${root}/assignments/derived/${artifactId}.json`
   return {
     id: id('operation'),
     type: 'ingest_course_material',
     status: 'proposed',
-    courseId,
+    courseId: normalizedCourseId,
     createdAt: nowIso(),
     contentHash: hash,
-    idempotencyKey: `${courseId}:${hash}`,
-    destinationPaths: [`${root}/materials/originals/${name}`, `${root}/materials/extracted/${artifactId}.txt`, `${root}/operations/journal.jsonl`],
-    diff: { rawArtifact: name, extractedArtifact: `${artifactId}.txt`, learnerClaims: [], warnings: [] },
-    material: { artifactId, name, sourceType, originalContent, extractedText },
+    idempotencyKey: `${normalizedCourseId}:${hash}`,
+    destinationPaths: [materialPath, extractedPath, assignmentPath, `${root}/materials/manifest.json`, `${root}/operations/journal.jsonl`],
+    diff: { rawArtifact: materialPath, extractedArtifact: extractedPath, assignmentMetadata: assignmentPath, learnerClaims: [], warnings: parseStatus === 'parsed' ? [] : [`parse status: ${parseStatus}`] },
+    material: { artifactId, name: safeName, originalName: String(name), sourceType, originalContent: originalContent == null ? '' : originalContent, originalBytesBase64, byteLength, extractedText, assignmentId, derivedAssignments, parseStatus },
   }
 }
 
@@ -311,18 +378,28 @@ export function commitMaterialOperation(memory, operationId, token) {
   if (!tokenMatches(operation, token)) throw new Error('Approval token is missing, expired, reused, or does not match this proposal')
   const next = clone(memory)
   const target = next.operations.find((item) => item.id === operationId)
-  target.status = 'committed'
+  target.status = 'writing'
+  target.startedAt = nowIso()
   target.approvalToken.used = true
   const material = target.material
-  const duplicate = next.artifacts.find((item) => item.contentHash === target.contentHash && item.courseId === target.courseId)
+  const duplicate = next.artifacts.find((item) => item.contentHash === target.contentHash && item.courseId === target.courseId && item.immutable)
   if (duplicate) {
     target.status = 'failed'
     target.reason = 'duplicate artifact retained; no files were overwritten'
     target.duplicateOf = duplicate.id
+    target.completedAt = nowIso()
     return next
   }
-  next.artifacts.push({ id: material.artifactId, type: sourceTypeLabel(material.sourceType), title: material.name, source: 'local import', courseId: target.courseId, path: target.destinationPaths[0], content: material.originalContent, extractedText: material.extractedText, immutable: true, contentHash: target.contentHash, createdAt: nowIso() })
-  target.result = { artifactId: material.artifactId }
+  const importedAt = nowIso()
+  const rawArtifact = { id: material.artifactId, type: sourceTypeLabel(material.sourceType), title: material.name, originalName: material.originalName || material.name, source: material.sourceType, courseId: target.courseId, path: target.destinationPaths[0], content: material.originalContent, originalBytesBase64: material.originalBytesBase64 || '', byteLength: material.byteLength, extractedText: material.extractedText, immutable: true, contentHash: target.contentHash, byteHash: target.contentHash, parseStatus: material.parseStatus || 'parsed', importedAt, createdAt: importedAt }
+  next.artifacts.push(rawArtifact)
+  next.artifacts.push({ id: `${material.artifactId}-extracted`, type: 'extracted-text', title: `${material.name} extracted text`, courseId: target.courseId, path: target.destinationPaths[1], content: material.extractedText || '', immutable: false, derivedFrom: [material.artifactId], sourceArtifactId: material.artifactId, contentHash: material.extractedText ? fallbackHash(material.extractedText) : null, createdAt: importedAt })
+  next.artifacts.push({ id: `${material.artifactId}-assignments`, type: 'assignment-metadata', title: `${material.name} assignment metadata`, courseId: target.courseId, path: target.destinationPaths[2], content: JSON.stringify(material.derivedAssignments || []), immutable: false, derivedFrom: [material.artifactId], sourceArtifactId: material.artifactId, assignmentId: material.assignmentId || null, createdAt: importedAt })
+  next.materialManifest = [...(next.materialManifest || []), { artifactId: material.artifactId, courseId: target.courseId, sourceType: material.sourceType, originalFilename: material.originalName || material.name, filename: material.name, relativePath: target.destinationPaths[0], byteHash: target.contentHash, importTime: importedAt, parseStatus: material.parseStatus || 'parsed', derivedExtractedText: target.destinationPaths[1], derivedAssignmentMetadata: target.destinationPaths[2], assignmentId: material.assignmentId || null }]
+  const derivedAssignments = Array.isArray(material.derivedAssignments) ? material.derivedAssignments : []
+  next.assignments = [...(next.assignments || []), ...derivedAssignments.map((assignment, index) => ({ ...assignment, id: assignment.id || `${material.artifactId}-assignment-${index + 1}`, courseId: target.courseId, sourceArtifactId: material.artifactId, sourceHash: target.contentHash }))]
+  target.result = { artifactId: material.artifactId, manifestPath: target.destinationPaths[3] }
+  target.status = 'committed'
   target.completedAt = nowIso()
   return next
 }
@@ -421,6 +498,47 @@ export async function saveJsonToStudySessions(bundle, value) {
   return { mode: 'download', path }
 }
 
+export async function saveMaterialToStudyContext(operation) {
+  if (typeof window === 'undefined' || typeof window.showDirectoryPicker !== 'function') throw new Error('No authenticated bridge is available. Use a Chromium browser with directory access for manual archive import.')
+  const material = operation?.material
+  if (!material?.originalBytesBase64) throw new Error('The original material bytes are missing; no file was written')
+  const rootHandle = await window.showDirectoryPicker({ mode: 'readwrite' })
+  const courses = await rootHandle.getDirectoryHandle('courses', { create: true })
+  const courseDirectory = await courses.getDirectoryHandle(operation.courseId.toUpperCase(), { create: true })
+  const materials = await courseDirectory.getDirectoryHandle('materials', { create: true })
+  const uploaded = await materials.getDirectoryHandle(MATERIAL_UPLOAD_DIRECTORY.split('/')[1], { create: true })
+  const filename = safeMaterialFilename(material.originalName || material.name)
+  const bytes = decodeBase64(material.originalBytesBase64)
+  const manifestHandle = await materials.getFileHandle('manifest.json', { create: true })
+  let manifest = []
+  try { manifest = JSON.parse(await (await manifestHandle.getFile()).text()) } catch { /* new manifest */ }
+  if (!Array.isArray(manifest)) manifest = []
+  if (manifest.some((item) => item.byteHash === operation.contentHash)) throw new Error('duplicate artifact retained; no files were overwritten')
+  let fileHandle
+  let existed = false
+  try { fileHandle = await uploaded.getFileHandle(filename); existed = true } catch { fileHandle = await uploaded.getFileHandle(filename, { create: true }) }
+  if (existed) throw new Error(`${filename} already exists; no file was overwritten`)
+  const writable = await fileHandle.createWritable()
+  await writable.write(bytes)
+  await writable.close()
+  const extractedDirectory = await materials.getDirectoryHandle('extracted', { create: true })
+  const extractedHandle = await extractedDirectory.getFileHandle(`${material.artifactId}.txt`, { create: true })
+  const extractedWritable = await extractedHandle.createWritable()
+  await extractedWritable.write(material.extractedText || '')
+  await extractedWritable.close()
+  const assignmentsDirectory = await courseDirectory.getDirectoryHandle('assignments', { create: true })
+  const derivedDirectory = await assignmentsDirectory.getDirectoryHandle('derived', { create: true })
+  const assignmentHandle = await derivedDirectory.getFileHandle(`${material.artifactId}.json`, { create: true })
+  const assignmentWritable = await assignmentHandle.createWritable()
+  await assignmentWritable.write(JSON.stringify({ schemaVersion: 1, artifactId: material.artifactId, sourceArtifactId: material.artifactId, assignments: material.derivedAssignments || [], assignmentId: material.assignmentId || null }, null, 2))
+  await assignmentWritable.close()
+  manifest.push({ artifactId: material.artifactId, courseId: operation.courseId, sourceType: material.sourceType, originalFilename: material.originalName || material.name, relativePath: `courses/${operation.courseId.toUpperCase()}/${MATERIAL_UPLOAD_DIRECTORY}/${filename}`, byteHash: operation.contentHash, importTime: nowIso(), parseStatus: material.parseStatus || 'parsed', derivedExtractedText: `courses/${operation.courseId.toUpperCase()}/materials/extracted/${material.artifactId}.txt`, derivedAssignmentMetadata: `courses/${operation.courseId.toUpperCase()}/assignments/derived/${material.artifactId}.json`, assignmentId: material.assignmentId || null })
+  const manifestWritable = await manifestHandle.createWritable()
+  await manifestWritable.write(JSON.stringify(manifest, null, 2))
+  await manifestWritable.close()
+  return { mode: 'filesystem', path: `study-context/courses/${operation.courseId.toUpperCase()}/${MATERIAL_UPLOAD_DIRECTORY}/${filename}` }
+}
+
 export async function pingStudyBridge({ endpoint, secret = '', signal } = {}) {
   if (!endpoint) return { status: 'manual fallback', endpointConfigured: false, message: 'No local bridge configured; manual export/import is ready.' }
   const response = await fetch(`${endpoint.replace(/\/$/, '')}/ping`, { headers: secret ? { Authorization: `Bearer ${secret}` } : {}, signal })
@@ -433,6 +551,35 @@ export async function getStudyCourseContext({ endpoint, courseId, secret = '', s
   const response = await fetch(`${endpoint.replace(/\/$/, '')}/course_context?courseId=${encodeURIComponent(courseId)}`, { headers: secret ? { Authorization: `Bearer ${secret}` } : {}, signal })
   if (!response.ok) throw new Error(`Bridge context request failed (${response.status})`)
   return response.json()
+}
+
+async function bridgeJson({ endpoint, path, secret = '', method = 'GET', body: payload, signal, idempotencyKey = '' } = {}) {
+  if (!endpoint) throw new Error('No study bridge configured')
+  const headers = { 'Content-Type': 'application/json' }
+  if (secret) headers.Authorization = `Bearer ${secret}`
+  if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey
+  const response = await fetch(`${endpoint.replace(/\/$/, '')}${path}`, { method, headers, body: payload == null ? undefined : JSON.stringify(payload), signal })
+  let result = {}
+  try { result = await response.json() } catch { /* error below remains useful */ }
+  if (!response.ok) throw new Error(result.error || `Bridge request failed (${response.status})`)
+  return result
+}
+
+export async function proposeStudyMaterial({ endpoint, secret = '', operation, signal } = {}) {
+  const material = operation?.material || {}
+  return bridgeJson({ endpoint, secret, signal, method: 'POST', path: '/propose_ingest_material', idempotencyKey: operation?.idempotencyKey, body: {
+    courseId: operation.courseId,
+    material: { sourceType: material.sourceType, originalName: material.originalName || material.name, filename: material.name, originalContent: material.originalBytesBase64 ? { encoding: 'base64', data: material.originalBytesBase64 } : { encoding: 'utf8', data: material.originalContent || '' }, byteLength: material.byteLength, extractedText: material.extractedText || '', assignmentId: material.assignmentId || null, derivedAssignments: material.derivedAssignments || [], parseStatus: material.parseStatus || 'parsed' },
+    diff: operation.diff,
+  } })
+}
+
+export async function approveStudyOperation({ endpoint, secret = '', operationId, signal } = {}) {
+  return bridgeJson({ endpoint, secret, signal, method: 'POST', path: '/approve_operation', body: { operationId } })
+}
+
+export async function commitStudyOperation({ endpoint, secret = '', operationId, approvalToken, signal } = {}) {
+  return bridgeJson({ endpoint, secret, signal, method: 'POST', path: '/commit_operation', body: { operationId, approvalToken } })
 }
 
 export function getStudyBridgeHealth() {

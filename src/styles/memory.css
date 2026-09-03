@@ -226,6 +226,9 @@
 .memory-proposal-grid code,
 .memory-proposal-grid li { overflow-wrap: anywhere; color: var(--memory-muted); font-size: 8px; line-height: 1.5; }
 .memory-proposal-grid ul { display: grid; gap: 5px; margin: 0; padding-left: 17px; }
+.memory-upload-label { color: var(--memory-muted); font-size: 8px; text-transform: uppercase; }
+.memory-upload-label input { margin-top: 6px; width: 100%; height: 32px; padding: 7px; border: 1px solid var(--memory-border); color: var(--memory-text); background: #0a1011; font-size: 9px; }
+.memory-upload-label input:focus-visible { outline: 1px solid var(--memory-green); outline-offset: 2px; }
 .memory-proposal-grid li small { color: var(--memory-dim); font-size: 7px; }
 .memory-muted { color: var(--memory-muted); font-size: 8px; }
 .memory-warning-list { color: var(--memory-amber); }

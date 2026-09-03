@@ -32,7 +32,7 @@ function taskUpdate(tasks) {
   return `\n\n**Added to focus:**\n${tasks.map((task, index) => `${index + 1}. **${task.label}** — ${task.project}, ${task.estimate}${task.due ? `, due ${task.due}` : ''}`).join('\n')}`
 }
 
-export default function ChatBar({ tasks, assignments, onCreateTasks }) {
+export default function ChatBar({ tasks, assignments, pendingClassResolution, onResolveClass, onCreateTasks }) {
   const [isOpen, setIsOpen] = useState(true)
   const [draft, setDraft] = useState('')
   const [messages, setMessages] = useState([])
@@ -51,6 +51,13 @@ export default function ChatBar({ tasks, assignments, onCreateTasks }) {
     if (isOpen && scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
   }, [messages, isOpen])
 
+  useEffect(() => {
+    if (!pendingClassResolution) return
+    setMessages((current) => current.some((message) => message.routingFile === pendingClassResolution.source?.name)
+      ? current
+      : [...current, { id: `routing-${Date.now()}`, role: 'assistant', content: `I couldn't identify the class for **${pendingClassResolution.source?.name}** from its contents. What class code or display name should I use? I will apply your answer only to this upload.`, phase: 'done', routingFile: pendingClassResolution.source?.name }])
+  }, [pendingClassResolution])
+
   function reset() {
     chatControllerRef.current?.abort()
     if (activityTimerRef.current) window.clearInterval(activityTimerRef.current)
@@ -62,6 +69,19 @@ export default function ChatBar({ tasks, assignments, onCreateTasks }) {
   async function send(value) {
     const prompt = value.trim()
     if (!prompt || isStreaming) return
+    if (pendingClassResolution && onResolveClass) {
+      const assistantId = Date.now()
+      setMessages((current) => [...current, { role: 'user', content: prompt }, { id: assistantId, role: 'assistant', content: '', phase: 'thinking', activity: 'Checking class route' }])
+      setDraft('')
+      setIsStreaming(true)
+      try {
+        const result = onResolveClass(prompt)
+        setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, phase: result.ok ? 'done' : 'error', content: result.message } : message))
+      } finally {
+        setIsStreaming(false)
+      }
+      return
+    }
     const assistantId = Date.now()
     const context = `Dashboard context and available actions:\n- Focus taskbar: Qwen can add concrete focus tasks; the user can open, edit, complete, and restore them.\n- Assignment queue: read-only items extracted from imported syllabi.\n- GitHub panel: read-only open pull requests and repository pull requests.\n- Weather panel: today's local forecast when available.\n\nCurrent focus tasks:\n${JSON.stringify(tasks)}\n\nAssignment queue:\n${JSON.stringify(assignments)}`
     const history = messages.filter((message) => message.role === 'user' || (message.role === 'assistant' && message.content)).slice(-8).map((message) => ({ role: message.role, content: message.content }))

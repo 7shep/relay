@@ -9,6 +9,7 @@ import {
 } from "../constants/prompts.js";
 import { dayKey, formatSyllabusDue } from "../utils/dates.js";
 import { extractJson } from "../utils/json.js";
+import { normalizeCourseRoute } from "./studyMemoryRuntime.js";
 
 async function qwenJson(system, prompt, signal) {
   const response = await fetch(OLLAMA_CHAT_URL, {
@@ -50,7 +51,7 @@ function normalizeDraftTasks(items) {
         .filter((task) => task.label)
     : [];
 }
-function normalizeAssignments(items, now, sourceNames) {
+function normalizeAssignments(items, now, sourceNames, routeBySource = new Map()) {
   return Array.isArray(items)
     ? items
         .map((item, index) => {
@@ -61,12 +62,14 @@ function normalizeAssignments(items, now, sourceNames) {
           const dueDate = /^\d{4}-\d{2}-\d{2}$/.test(dueAt)
             ? new Date(`${dueAt}T23:59:00`)
             : null;
+          const sourceName = String(item?.sourceFilename || item?.sourceName || sourceNames[0] || '').trim()
+          const route = routeBySource.get(sourceName) || routeBySource.get(sourceNames[0])
           return {
             id: `syllabus-${index}-${title
               .toLowerCase()
               .replace(/[^a-z0-9]+/g, "-")
               .slice(0, 48)}`,
-            course: String(item?.course || "").trim(),
+            course: String(item?.course || route?.courseLabel || route?.courseId || "").trim(),
             title,
             kind: String(
               item?.kind ||
@@ -79,10 +82,28 @@ function normalizeAssignments(items, now, sourceNames) {
             dueAt: formatSyllabusDue(dueAt),
             weight: String(item?.weight || "").trim(),
             source: sourceNames.join(", "),
+            sourceFilename: sourceName,
+            courseId: route?.courseId || "",
+            sourceRouteEvidence: route?.evidence || "",
           };
         })
         .filter((item) => item.title)
     : [];
+}
+
+export function normalizeSyllabusResponse(payload, now, sources = []) {
+  const sourceNames = sources.map((source) => source.name)
+  const records = Array.isArray(payload?.sources) ? payload.sources : Array.isArray(payload?.files) ? payload.files : Array.isArray(payload?.routing) ? payload.routing : []
+  const routes = sources.map((source) => {
+    const record = records.find((item) => String(item?.sourceFilename || item?.sourceName || item?.filename || item?.name || '').trim() === source.name) || (records.length === 1 && sources.length === 1 ? records[0] : null) || {}
+    return { sourceFilename: source.name, ...normalizeCourseRoute(record), assignments: Array.isArray(record.assignments) ? record.assignments : [] }
+  })
+  const routeBySource = new Map(routes.map((route) => [route.sourceFilename, route]))
+  const rootAssignments = Array.isArray(payload?.assignments) ? payload.assignments : []
+  const assignments = records.length === 0
+    ? normalizeAssignments(rootAssignments, now, sourceNames, routeBySource)
+    : routes.flatMap((route) => normalizeAssignments(route.assignments, now, [route.sourceFilename], routeBySource).map((item) => ({ ...item, source: route.sourceFilename, courseId: route.courseId, sourceFilename: route.sourceFilename })))
+  return { assignments, routes }
 }
 export async function draftFocusTasks(
   today,
@@ -118,14 +139,19 @@ export async function draftTasksFromPrompt(
   );
 }
 export async function draftAssignmentsFromSyllabi(sources, now, signal) {
-  return normalizeAssignments(
+  const result = await draftSyllabusImport(sources, now, signal)
+  return result.assignments
+}
+
+export async function draftSyllabusImport(sources, now, signal) {
+  return normalizeSyllabusResponse(
     await qwenJson(
       SYLLABUS_SYSTEM_PROMPT,
       syllabusPrompt({ today: dayKey(now), sources }),
       signal,
     ),
     now,
-    sources.map((source) => source.name),
+    sources,
   );
 }
 export async function streamQwenChat(messages, onChunk, signal) {

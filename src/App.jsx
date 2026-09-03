@@ -6,7 +6,7 @@ import ChatBar from './components/ChatBar.jsx'
 import WeatherPanel from './components/WeatherPanel.jsx'
 import AssignmentsPanel from './components/AssignmentsPanel.jsx'
 import PullRequestsPanel from './components/PullRequestsPanel.jsx'
-import AcademicWorkspace from './components/AcademicWorkspace.jsx'
+import StudyMemoryWorkspace from './components/StudyMemoryWorkspace.jsx'
 import { draftAssignmentsFromSyllabi, draftFocusTasks, draftTasksFromPrompt } from './services/qwen.js'
 import { readSyllabusFile } from './services/syllabus.js'
 import { useWeather } from './hooks/useWeather.js'
@@ -172,7 +172,7 @@ function App() {
 
   const tasksLeft = useMemo(() => tasks.filter((task) => !task.done).length, [tasks])
 
-  if (surface === 'workspace') return <AcademicWorkspace assignments={assignments} onBack={() => setSurface('dashboard')} />
+  if (surface === 'workspace') return <StudyMemoryWorkspace assignments={assignments} onBack={() => setSurface('dashboard')} />
 
   return (
     <div className="terminal-app">

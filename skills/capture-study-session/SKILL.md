@@ -1,3 +1,8 @@
+---
+name: capture-study-session
+description: Compile the current study conversation into a source-linked session proposal or honest manual-import bundle for Relay without claiming an uncommitted save.
+---
+
 # capture-study-session
 
 Use this skill explicitly at the end of a study conversation, for example: `capture this study session for CS-441`.

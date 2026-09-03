@@ -18,10 +18,14 @@ export function base64ToBytes(value) {
 
 export async function readSyllabusFile(file) {
   const bytes = await file.arrayBuffer()
+  // PDF.js transfers the parser buffer to its worker, which detaches it.
+  // Capture the immutable archive metadata before handing bytes to PDF.js.
+  const originalBytesBase64 = bytesToBase64(bytes)
+  const byteLength = bytes.byteLength
+  const sourceHash = await contentHash(bytes)
   if (!/\.pdf$/i.test(file.name)) {
     const text = await file.text()
-    const originalBytesBase64 = bytesToBase64(bytes)
-    return { name: file.name, text, originalContent: text, originalBytesBase64, byteLength: bytes.byteLength, sourceHash: await contentHash(bytes), parseStatus: 'parsed' }
+    return { name: file.name, text, originalContent: text, originalBytesBase64, byteLength, sourceHash, parseStatus: 'parsed' }
   }
   const document = await pdfjsLib.getDocument({ data: bytes }).promise;
   const pages = [];
@@ -35,6 +39,5 @@ export async function readSyllabusFile(file) {
     throw new Error(
       `${file.name} has no selectable text. Scanned PDFs need OCR before import.`,
     );
-  const originalBytesBase64 = bytesToBase64(bytes)
-  return { name: file.name, text, originalContent: '', originalBytesBase64, byteLength: bytes.byteLength, sourceHash: await contentHash(bytes), parseStatus: 'parsed' };
+  return { name: file.name, text, originalContent: '', originalBytesBase64, byteLength, sourceHash, parseStatus: 'parsed' };
 }

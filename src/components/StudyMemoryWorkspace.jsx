@@ -93,7 +93,12 @@ export default function StudyMemoryWorkspace({ assignments = [], incomingMateria
       }
       if (!cancelled) {
         setMemory(working)
-        if (lastOperation) { setProposal(lastOperation); setView('operations'); showNotice('archive proposal ready · review the exact destination before approval') }
+        if (lastOperation) {
+          setCourseId(lastOperation.courseId)
+          setProposal(lastOperation)
+          setView('operations')
+          showNotice('archive proposal ready · review the exact destination before approval')
+        }
       }
     })().catch((intakeError) => { if (!cancelled) showError(intakeError.message) })
     return () => { cancelled = true }

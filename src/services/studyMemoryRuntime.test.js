@@ -10,6 +10,7 @@ import {
   createSessionBundle,
   buildTutorProfile,
   createLearnerProfileMarkdown,
+  createLearnerSignalMarkdown,
   createSessionMarkdown,
   proposeAssessmentEvidence,
   proposeLearnerMutation,
@@ -198,7 +199,8 @@ describe('study memory bridge contract', () => {
     expect(note).toContain('confidence: ["72% — one observed repair"]')
     expect(note).toContain('[[../concepts/base-cases]]')
     expect(note).toContain('[[../assignments/lab-1]]')
-    expect(note).toContain('[[../../learner/recurring-mistakes]]')
+    expect(note).toContain('[[../../../learner/recurring-mistakes]]')
+    expect(createLearnerSignalMarkdown({ type: 'recurring_mistake', text: 'Forgets the base case', sessionId: 'session-test-01' }, { courseCode: 'CISC301', sessionFilename: '2026-09-02-recursion-session-test-01.md' })).toContain('[[../../sessions/2026-09-02-recursion-session-test-01]]')
     expect(obsidianSessionPath(session, 'CISC301')).toContain('courses/CISC301/sessions/2026-09-02-recursion-session-test-01.md')
   })
 

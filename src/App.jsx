@@ -6,7 +6,7 @@ import ChatBar from './components/ChatBar.jsx'
 import WeatherPanel from './components/WeatherPanel.jsx'
 import AssignmentsPanel from './components/AssignmentsPanel.jsx'
 import PullRequestsPanel from './components/PullRequestsPanel.jsx'
-import StudyMemoryWorkspace from './components/StudyMemoryWorkspace.jsx'
+import VaultGraphWorkspace from './components/VaultGraphWorkspace.jsx'
 import { draftSyllabusImport, draftFocusTasks, draftTasksFromPrompt } from './services/qwen.js'
 import { readSyllabusFile } from './services/syllabus.js'
 import { validateCourseAnswer } from './services/studyMemoryRuntime.js'
@@ -143,7 +143,7 @@ function App() {
     setArchiveIntake((current) => [...current, { ...pending.source, sourceType: 'syllabus', courseId, courseLabel: answer.trim(), routeEvidence: `user-confirmed class for ${pending.route.sourceFilename}`, derivedAssignments: assignmentsRef.current.filter((item) => item.sourceFilename === pending.route.sourceFilename) }])
     setPendingClassUploads((current) => current.slice(1))
     setSyllabusState({ status: pendingClassUploads.length > 1 ? 'needs-class' : 'ready', error: pendingClassUploads.length > 1 ? 'Another upload needs a class name in the assistant.' : '' })
-    return { ok: true, message: `Thanks — ${pending.source.name} is routed to ${answer.trim()}. Review its archive proposal in study memory before anything is written.` }
+    return { ok: true, message: `Thanks — ${pending.source.name} is routed to ${answer.trim()}. Refresh the vault graph after its Markdown archive is committed.` }
   }, [pendingClassUploads])
 
   useEffect(() => () => syllabusControllerRef.current?.abort(), [])
@@ -195,7 +195,7 @@ function App() {
 
   const tasksLeft = useMemo(() => tasks.filter((task) => !task.done).length, [tasks])
 
-  if (surface === 'workspace') return <StudyMemoryWorkspace assignments={assignments} incomingMaterials={archiveIntake} onBack={() => setSurface('dashboard')} />
+  if (surface === 'workspace') return <VaultGraphWorkspace assignments={assignments} archivePending={archiveIntake.length + pendingClassUploads.length} onBack={() => setSurface('dashboard')} />
 
   return (
     <div className="terminal-app">

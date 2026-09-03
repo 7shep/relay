@@ -19,6 +19,7 @@ import {
   obsidianSessionPath,
   obsidianSignalPath,
 } from '../src/services/studyMemoryMarkdown.js'
+import { buildVaultGraph } from '../src/services/vaultGraph.js'
 
 const port = Number(process.env.RELAY_BRIDGE_PORT || 4112)
 const root = resolve(process.env.RELAY_STUDY_ROOT || 'study-context')
@@ -178,6 +179,46 @@ async function readSignalClaims(courseId) {
   return claims
 }
 
+const rootLearnerNotes = new Set(['learner/profile.md', 'learner/learning-preferences.md', 'learner/recurring-mistakes.md'])
+
+async function readMarkdownTree(relativeDirectory) {
+  const directory = await assertSafeRootPath(relativeDirectory)
+  const notes = []
+  async function visit(current, currentRelative) {
+    let entries
+    try { entries = await readdir(current, { withFileTypes: true }) } catch (error) { if (error.code === 'ENOENT') return; throw error }
+    for (const entry of entries) {
+      const childRelative = `${currentRelative}/${entry.name}`
+      const child = await assertSafeRootPath(childRelative)
+      const info = await lstat(child)
+      if (info.isSymbolicLink()) throw new Error('symlinks/reparse points are not allowed in vault graph paths')
+      if (info.isDirectory()) await visit(child, childRelative)
+      else if (info.isFile() && extname(entry.name).toLowerCase() === '.md') notes.push({ path: relativePath(child), content: await readFile(child, 'utf8') })
+    }
+  }
+  try {
+    const info = await lstat(directory)
+    if (info.isSymbolicLink()) throw new Error('symlinks/reparse points are not allowed in vault graph paths')
+    if (!info.isDirectory()) return []
+  } catch (error) {
+    if (error.code === 'ENOENT') return []
+    throw error
+  }
+  await visit(directory, normalizeVaultPath(relativeDirectory))
+  return notes
+}
+
+function normalizeVaultPath(value) {
+  return String(value || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
+}
+
+async function vaultGraph(courseId, topic = '') {
+  assertCourse(courseId)
+  const courseNotes = await readMarkdownTree(`courses/${courseId.toUpperCase()}`)
+  const learnerNotes = (await readMarkdownTree('learner')).filter((note) => rootLearnerNotes.has(normalizeVaultPath(note.path)))
+  return buildVaultGraph([...courseNotes, ...learnerNotes], { courseId, topic })
+}
+
 async function courseContext(courseId, topic = '') {
   assertCourse(courseId)
   const claims = await readSignalClaims(courseId)
@@ -325,7 +366,7 @@ async function commitSession(operation, token) {
   concepts.forEach((topic) => files.push({ courseId: operation.courseId, relativePath: obsidianConceptPath(courseCode, topic).replace(`courses/${courseCode}/`, ''), content: createConceptMarkdown(courseCode, topic, noteFilename), ignoreIfDifferent: true }))
   const assignment = bundle.assignment || bundle.assignmentId
   if (assignment) files.push({ courseId: operation.courseId, relativePath: obsidianAssignmentPath(courseCode, assignment).replace(`courses/${courseCode}/`, ''), content: createAssignmentMarkdown(courseCode, assignment, noteFilename), ignoreIfDifferent: true })
-  records.forEach((claim, index) => files.push({ courseId: operation.courseId, relativePath: obsidianSignalPath(courseCode, bundle.sessionId, index).replace(`courses/${courseCode}/`, ''), content: createLearnerSignalMarkdown(claim, { courseCode }) }))
+  records.forEach((claim, index) => files.push({ courseId: operation.courseId, relativePath: obsidianSignalPath(courseCode, bundle.sessionId, index).replace(`courses/${courseCode}/`, ''), content: createLearnerSignalMarkdown(claim, { courseCode, sessionFilename: noteFilename }) }))
   const sessionCount = await existingVaultSessionCount()
   const profileRefresh = (sessionCount + 1) % 3 === 0
   if (profileRefresh) {
@@ -375,6 +416,10 @@ async function handle(request, response) {
     if (url.pathname === '/course_context' && request.method === 'GET') {
       if (!authorized(request)) return json(response, 401, { error: 'authentication required' })
       return json(response, 200, await courseContext(url.searchParams.get('courseId'), url.searchParams.get('topic') || ''))
+    }
+    if (url.pathname === '/vault_graph' && request.method === 'GET') {
+      if (!authorized(request)) return json(response, 401, { error: 'authentication required' })
+      return json(response, 200, await vaultGraph(url.searchParams.get('courseId'), url.searchParams.get('topic') || ''))
     }
     if (!authorized(request, true)) return json(response, 401, { error: 'authenticated bridge request required' })
     if (url.pathname === '/propose_save_session' && request.method === 'POST') {

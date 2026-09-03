@@ -15,6 +15,7 @@ import {
   obsidianSessionPath,
   obsidianSignalPath,
 } from './studyMemoryMarkdown.js'
+import { buildMemoryGraph } from './vaultGraph.js'
 
 const STUDY_MEMORY_KEY = 'relay.study-memory.v1'
 export const STUDY_MEMORY_SCHEMA_VERSION = 1
@@ -597,7 +598,7 @@ export async function saveObsidianSessionToVault(bundle, memory) {
   const assignment = bundle.assignment || bundle.assignmentId
   if (assignment) files.push({ directory: assignments, filename: `${String(assignment).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'assignment'}.md`, content: createAssignmentMarkdown(courseCode, assignment, noteFilename), path: obsidianAssignmentPath(courseCode, assignment), allowIgnore: true })
   const sessionClaims = (memory?.learnerClaims || []).filter((item) => item.sessionId === bundle.sessionId)
-  sessionClaims.forEach((claim, index) => files.push({ directory: signalDirectory, filename: obsidianSignalPath(courseCode, bundle.sessionId, index).split('/').pop(), content: createLearnerSignalMarkdown(claim, { courseCode }), path: obsidianSignalPath(courseCode, bundle.sessionId, index), rejectExisting: true }))
+  sessionClaims.forEach((claim, index) => files.push({ directory: signalDirectory, filename: obsidianSignalPath(courseCode, bundle.sessionId, index).split('/').pop(), content: createLearnerSignalMarkdown(claim, { courseCode, sessionFilename: noteFilename }), path: obsidianSignalPath(courseCode, bundle.sessionId, index), rejectExisting: true }))
   const profileDue = (memory?.sessions?.length || 0) > 0 && (memory.sessions.length % 3 === 0)
   if (profileDue) {
     const profile = buildTutorProfile(memory)
@@ -663,6 +664,18 @@ export async function getStudyCourseContext({ endpoint, courseId, topic = '', se
   const query = `courseId=${encodeURIComponent(courseId)}${topic ? `&topic=${encodeURIComponent(topic)}` : ''}`
   const response = await fetch(`${endpoint.replace(/\/$/, '')}/course_context?${query}`, { headers: secret ? { Authorization: `Bearer ${secret}` } : {}, signal })
   if (!response.ok) throw new Error(`Bridge context request failed (${response.status})`)
+  return response.json()
+}
+
+export async function getVaultGraph({ endpoint, courseId, topic = '', secret = '', signal, memory } = {}) {
+  if (!endpoint) return buildMemoryGraph(memory || readStudyMemory(), courseId, topic)
+  const query = `courseId=${encodeURIComponent(courseId)}${topic ? `&topic=${encodeURIComponent(topic)}` : ''}`
+  const response = await fetch(`${endpoint.replace(/\/$/, '')}/vault_graph?${query}`, { headers: secret ? { Authorization: `Bearer ${secret}` } : {}, signal })
+  if (!response.ok) {
+    let message = ''
+    try { message = (await response.json()).error || '' } catch { /* error below remains useful */ }
+    throw new Error(message || `Bridge graph request failed (${response.status})`)
+  }
   return response.json()
 }
 

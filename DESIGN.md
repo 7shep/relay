@@ -4,7 +4,7 @@
 
 ## Overview
 
-Relay is a local-first React/Vite personal dashboard with a terminal-style daily focus surface, weather and assignment panels, GitHub pull-request visibility, a local Qwen assistant dock, and a file-first study-memory bridge for ChatGPT session capture. This document describes the implementation in `src/App.jsx`, `src/components/`, `src/services/`, `src/constants/`, and the imported styles under `src/styles/`, with product context from `docs/designs/agent-workspace.md` and `docs/designs/chatgpt-study-memory-bridge.md`. It was generated on 2026-09-02. No Design Plan v2 or selected art direction was found; the available design notes are product briefs rather than selected visual directions.
+Relay is a local-first React/Vite personal dashboard with a terminal-style daily focus surface, weather and assignment panels, GitHub pull-request visibility, a local Qwen assistant dock, and a read-only Obsidian vault graph for bounded study evidence. This document describes the implementation in `src/App.jsx`, `src/components/`, `src/services/`, `src/constants/`, and the imported styles under `src/styles/`, with product context from `docs/designs/agent-workspace.md` and `docs/designs/chatgpt-study-memory-bridge.md`. It was generated on 2026-09-02. No Design Plan v2 or selected art direction was found; the available design notes are product briefs rather than selected visual directions.
 <!-- /GENERATED:overview -->
 
 <!-- GENERATED:typography source=/document updated=2026-09-02 -->

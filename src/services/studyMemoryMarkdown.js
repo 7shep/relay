@@ -154,9 +154,9 @@ export function createSessionMarkdown(bundle = {}, { courseCode } = {}) {
     conceptLinks || '- Concepts: _not supplied._',
     assignmentLink.trim() || '- Assignment: _not supplied._',
     `- Raw capture: ${rawLink}`,
-    `- Learner profile: ${relativeLink('../../learner/profile')}`,
-    `- Learning preferences: ${relativeLink('../../learner/learning-preferences')}`,
-    `- Recurring mistakes: ${relativeLink('../../learner/recurring-mistakes')}`,
+    `- Learner profile: ${relativeLink('../../../learner/profile')}`,
+    `- Learning preferences: ${relativeLink('../../../learner/learning-preferences')}`,
+    `- Recurring mistakes: ${relativeLink('../../../learner/recurring-mistakes')}`,
     '',
     '## Session summary',
     '',
@@ -229,7 +229,8 @@ export function createRecurringMistakesMarkdown(profile = {}) {
   return profileDocument(profile, 'Recurring mistakes', 'recurring-mistakes', (item) => item.type === 'recurring_mistake' || item.type === 'struggle')
 }
 
-export function createLearnerSignalMarkdown(claim = {}, { courseCode } = {}) {
+export function createLearnerSignalMarkdown(claim = {}, { courseCode, sessionFilename = '' } = {}) {
+  const sessionLink = claim.sessionId ? `**Session:** ${relativeLink(`../../sessions/${sessionFilename || safeSegment(claim.sessionId)}`)}` : ''
   return [
     '---',
     'type: learner-signal',
@@ -244,6 +245,7 @@ export function createLearnerSignalMarkdown(claim = {}, { courseCode } = {}) {
     '',
     `# ${claim.type || 'Learner signal'} · ${observationText(claim)}`,
     '',
+    sessionLink,
     `**Hypothesis:** ${observationText(claim)}`,
     '',
     `**Evidence:** ${claim.sourceRef || 'not supplied'}`,

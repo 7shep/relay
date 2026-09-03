@@ -1,6 +1,6 @@
-# Start
+# Relay
 
-A small local-first personal dashboard MVP.
+A local-first personal dashboard and study workspace for planning work, tracking assignments, and building course memory from study sessions.
 
 ## Run it
 
@@ -9,11 +9,11 @@ npm install
 npm run dev
 ```
 
-The first pass is intentionally browser-based and follows the terminal-style dashboard reference. It includes a live clock and greeting, weather, Qwen-planned focus tasks, upcoming assignments, live GitHub pull requests, responsive layout, and reduced-motion support.
+Relay provides a terminal-style daily dashboard with a live clock and greeting, weather, Qwen-planned focus tasks, upcoming assignments, live GitHub pull requests, responsive layout, and reduced-motion support. Its study-memory workspace connects ChatGPT session exports to source-linked course evidence, assessment questions, learner context, Tutor guidance, and Assignment guidance.
 
 ## GitHub setup
 
-The GitHub panel asks for your GitHub username the first time it loads. Public repositories work without a token. Add a read-only GitHub Personal Access Token if you want private repositories or a higher API limit. The current browser MVP stores those values in local storage; the Tauri version can move the token into the Windows keychain.
+The GitHub panel asks for your GitHub username the first time it loads. Public repositories work without a token. Add a read-only GitHub Personal Access Token if you want private repositories or a higher API limit. The browser app stores those values in local storage; a future Tauri version can move the token into the Windows keychain.
 
 ## Assignments
 
@@ -25,18 +25,8 @@ The assistant dock sends real streaming chat requests to local Ollama at `http:/
 
 ## Study memory bridge
 
-The `study memory` surface is the approved ChatGPT-to-local-memory MVP. Use the repository skill at [`skills/capture-study-session/SKILL.md`](skills/capture-study-session/SKILL.md) in ChatGPT to produce a schema-versioned JSON bundle, then import it into Relay. Relay shows the raw artifact, destination paths, missing-data warnings, provenance, confidence, and learner-record diff before any save. `approve & save locally` is explicit; duplicate imports, cancellation, and operation status remain visible. A manual bundle download is always available when MCP or the local bridge is unavailable.
+The `study memory` surface connects ChatGPT study sessions to a local, source-linked course archive. Use the repository skill at [`skills/capture-study-session/SKILL.md`](skills/capture-study-session/SKILL.md) in ChatGPT to produce a schema-versioned JSON bundle, then import it into Relay. Relay shows the raw artifact, destination paths, missing-data warnings, provenance, confidence, and learner-record diff before any save. `approve & save locally` is explicit; duplicate imports, cancellation, and operation status remain visible. A manual bundle download is always available when MCP or the local bridge is unavailable.
 
 For a real student-owned course folder, start the optional companion with a secret: see [`bridge/README.md`](bridge/README.md). Set `VITE_STUDY_BRIDGE_URL=http://127.0.0.1:4112` for the Relay health check. The bridge writes raw sessions and derived records under `study-context/courses/<COURSE>/`, rejects unsafe paths, keeps Graphify refresh optional, and does not expose unauthenticated write endpoints. Existing syllabus uploads continue to use the current local Qwen parser and dashboard assignment storage.
 
 The companion skills are [`skills/tutor/SKILL.md`](skills/tutor/SKILL.md), which loads bounded context at the beginning of each study session and proposes a cross-course profile refresh every three committed sessions, and [`skills/assignment/SKILL.md`](skills/assignment/SKILL.md), which resolves an assignment from the local context folder and guides it against its prompt and rubric.
-
-## gstack
-
-Use /browse from gstack for all web browsing. Never use mcp**claude-in-chrome**\* tools, or any other tools for that matter.
-Available skills: /office-hours, /plan-ceo-review, /plan-eng-review, /plan-design-review,
-/design-consultation, /design-shotgun, /design-html, /review, /ship, /land-and-deploy,
-/canary, /benchmark, /browse, /open-gstack-browser, /qa, /qa-only, /design-review,
-/setup-browser-cookies, /setup-deploy, /setup-gbrain, /sync-gbrain, /retro, /investigate,
-/document-release, /document-generate, /codex, /cso, /autoplan, /pair-agent, /careful, /freeze,
-/guard, /unfreeze, /gstack-upgrade, /learn.

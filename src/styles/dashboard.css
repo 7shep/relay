@@ -146,6 +146,30 @@ h1 {
   border: 1px solid var(--term-border);
   background: var(--term-panel);
 }
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.workspace-launch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 9px;
+  border: 1px solid var(--term-border);
+  color: var(--term-accent);
+  background: var(--term-accent-dim);
+  font-size: 9px;
+}
+.workspace-launch span {
+  color: var(--term-muted);
+}
+.workspace-launch:hover,
+.workspace-launch:focus-visible {
+  border-color: var(--term-accent-line);
+  color: var(--term-text);
+  outline: 0;
+}
 .weather-glyph {
   color: var(--term-accent);
   font-size: 22px;

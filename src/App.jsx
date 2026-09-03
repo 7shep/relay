@@ -6,6 +6,7 @@ import ChatBar from './components/ChatBar.jsx'
 import WeatherPanel from './components/WeatherPanel.jsx'
 import AssignmentsPanel from './components/AssignmentsPanel.jsx'
 import PullRequestsPanel from './components/PullRequestsPanel.jsx'
+import AcademicWorkspace from './components/AcademicWorkspace.jsx'
 import { draftAssignmentsFromSyllabi, draftFocusTasks, draftTasksFromPrompt } from './services/qwen.js'
 import { readSyllabusFile } from './services/syllabus.js'
 import { useWeather } from './hooks/useWeather.js'
@@ -13,6 +14,7 @@ import { dayKey } from './utils/dates.js'
 import { clearStoredAssignments, readAssignments, readFocusState, writeAssignments, writeFocusState } from './utils/storage.js'
 function App() {
   const [now, setNow] = useState(() => new Date())
+  const [surface, setSurface] = useState('dashboard')
   const [focusState] = useState(() => readFocusState(new Date()))
   const [tasks, setTasks] = useState(() => focusState.tasks)
   const [focusDay, setFocusDay] = useState(() => focusState.day)
@@ -170,10 +172,12 @@ function App() {
 
   const tasksLeft = useMemo(() => tasks.filter((task) => !task.done).length, [tasks])
 
+  if (surface === 'workspace') return <AcademicWorkspace assignments={assignments} onBack={() => setSurface('dashboard')} />
+
   return (
     <div className="terminal-app">
       <div className="dashboard-frame">
-        <DashboardHeader name="Alex" now={now} tasksLeft={tasksLeft} weather={weather} weatherStatus={weatherStatus} />
+        <DashboardHeader name="Alex" now={now} tasksLeft={tasksLeft} weather={weather} weatherStatus={weatherStatus} onOpenWorkspace={() => setSurface('workspace')} />
 
         <main className="dashboard-grid">
           <FocusTasks

@@ -22,3 +22,13 @@ The assignments panel uses local Qwen through Ollama to extract assignments, exa
 ## Local assistant
 
 The assistant dock sends real streaming chat requests to local Ollama at `http://localhost:11434` using `qwen2.5:7b`. Start Ollama and pull that model before chatting. Each request includes the current focus tasks and extracted assignment queue, and the sidebar cycles through live activity labels while the response is generating. Qwen knows about the focus taskbar, assignment queue, GitHub pull-request panel, and weather panel. When a message contains concrete work or asks how to plan or organize the day, Qwen answers normally and automatically captures the concrete work as focus tasks. Explicitly asking to add or create a task is also supported. Qwen fills the task label, project, estimate, due date, description, and timeline before adding it to the list. When every task is complete, the list defaults to an `everything checked off` state; click the done count to reveal completed tasks again.
+
+## gstack
+
+Use /browse from gstack for all web browsing. Never use mcp**claude-in-chrome**\* tools, or any other tools for that matter.
+Available skills: /office-hours, /plan-ceo-review, /plan-eng-review, /plan-design-review,
+/design-consultation, /design-shotgun, /design-html, /review, /ship, /land-and-deploy,
+/canary, /benchmark, /browse, /open-gstack-browser, /qa, /qa-only, /design-review,
+/setup-browser-cookies, /setup-deploy, /setup-gbrain, /sync-gbrain, /retro, /investigate,
+/document-release, /document-generate, /codex, /cso, /autoplan, /pair-agent, /careful, /freeze,
+/guard, /unfreeze, /gstack-upgrade, /learn.

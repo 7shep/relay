@@ -14,6 +14,9 @@ import {
   proposeMaterialIngest,
   proposeSaveSession,
   readStudyMemory,
+  normalizeCourseRoute,
+  safeMaterialFilename,
+  validateCourseAnswer,
   sessionBundleFilename,
   sessionBundlePath,
   validateSessionBundle,
@@ -112,6 +115,36 @@ describe('study memory bridge contract', () => {
     memory = commitAssessmentOperation(approved.memory, assessment.id, approved.operation.approvalToken)
     expect(memory.assessments).toHaveLength(1)
     expect(memory.questionEvidence[0].score).toEqual({ earned: 0, possible: 8 })
+  })
+
+  it('routes uploaded materials to file-uploaded, preserves source metadata, and links derived assignments', async () => {
+    let memory = readStudyMemory()
+    const material = await proposeMaterialIngest(memory, { courseId: 'cs-441', name: '..\\syllabus?.pdf', sourceType: 'syllabus', originalContent: 'PDF bytes', extractedText: 'Due date', derivedAssignments: [{ title: 'Lab 1' }], parseStatus: 'parsed' })
+    expect(material.destinationPaths[0]).toBe('courses/CS-441/materials/file-uploaded/syllabus_.pdf')
+    let approved = approveOperation(addOperation(memory, material), material.id)
+    memory = commitMaterialOperation(approved.memory, material.id, approved.operation.approvalToken)
+    expect(memory.materialManifest[0]).toMatchObject({ originalFilename: '..\\syllabus?.pdf', relativePath: material.destinationPaths[0], derivedAssignmentMetadata: material.destinationPaths[2] })
+    expect(memory.assignments[0]).toMatchObject({ title: 'Lab 1', sourceArtifactId: memory.materialManifest[0].artifactId })
+  })
+
+  it('retains duplicate material imports as failed no-overwrite operations', async () => {
+    let memory = readStudyMemory()
+    const first = await proposeMaterialIngest(memory, { courseId: 'cs-441', name: 'assignment.pdf', originalContent: 'same bytes' })
+    let approved = approveOperation(addOperation(memory, first), first.id)
+    memory = commitMaterialOperation(approved.memory, first.id, approved.operation.approvalToken)
+    const second = await proposeMaterialIngest(memory, { courseId: 'cs-441', name: 'renamed.pdf', originalContent: 'same bytes' })
+    approved = approveOperation(addOperation(memory, second), second.id)
+    const duplicate = commitMaterialOperation(approved.memory, second.id, approved.operation.approvalToken)
+    expect(duplicate.operations.at(-1)).toMatchObject({ status: 'failed', duplicateOf: first.material.artifactId })
+    expect(duplicate.artifacts.filter((item) => item.immutable)).toHaveLength(1)
+  })
+
+  it('blocks uncertain routes and normalizes unsafe filenames without losing the original name', () => {
+    expect(normalizeCourseRoute({ courseId: 'cs-441', confidence: 0.4, evidence: 'weak title similarity' }).needsClassName).toBe(true)
+    expect(normalizeCourseRoute({ courseId: 'cs-441', confidence: 0.94, evidence: 'header: CS-441' }).courseId).toBe('cs-441')
+    expect(safeMaterialFilename('..\\folder\\syllabus?.pdf')).toBe('syllabus_.pdf')
+    expect(validateCourseAnswer('CISC301')).toMatchObject({ valid: true, courseId: 'cisc301' })
+    expect(validateCourseAnswer('unknown')).toMatchObject({ valid: false, courseId: '' })
   })
 
   it('appends reviewed learner-claim revisions and keeps the original superseded', async () => {

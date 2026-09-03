@@ -4,6 +4,7 @@ import {
   approveOperation,
   buildCourseContext,
   cancelOperation,
+  courseFromRoute,
   commitAssessmentOperation,
   commitMaterialOperation,
   commitOperation,
@@ -12,12 +13,16 @@ import {
   getStudyBridgeHealth,
   getStudyCourseContext,
   pingStudyBridge,
+  proposeStudyMaterial,
+  approveStudyOperation,
+  commitStudyOperation,
   proposeAssessmentEvidence,
   proposeLearnerMutation,
   proposeMaterialIngest,
   proposeSaveSession,
   readStudyMemory,
   saveJsonToStudySessions,
+  saveMaterialToStudyContext,
   validateSessionBundle,
   writeStudyMemory,
 } from '../services/studyMemoryRuntime.js'
@@ -39,7 +44,7 @@ function labelFor(value) {
   return String(value || '').replace(/_/g, ' ')
 }
 
-export default function StudyMemoryWorkspace({ assignments = [], onBack }) {
+export default function StudyMemoryWorkspace({ assignments = [], incomingMaterials = [], onBack }) {
   const initial = useMemo(() => readStudyMemory(assignments), [assignments])
   const [memory, setMemory] = useState(initial)
   const [courseId, setCourseId] = useState(initial.courses[0]?.id || '')
@@ -51,8 +56,13 @@ export default function StudyMemoryWorkspace({ assignments = [], onBack }) {
   const [isBusy, setIsBusy] = useState(false)
   const [showQuestionForm, setShowQuestionForm] = useState(false)
   const [question, setQuestion] = useState(emptyQuestion)
+  const [showAssignmentImport, setShowAssignmentImport] = useState(false)
+  const [assignmentCode, setAssignmentCode] = useState('')
+  const [assignmentFile, setAssignmentFile] = useState(null)
   const sessionInputRef = useRef(null)
   const materialInputRef = useRef(null)
+  const assignmentInputRef = useRef(null)
+  const consumedMaterialsRef = useRef(new Set())
 
   useEffect(() => writeStudyMemory(memory), [memory])
 
@@ -64,6 +74,30 @@ export default function StudyMemoryWorkspace({ assignments = [], onBack }) {
   const operations = memory.operations.filter((item) => item.courseId === course?.id).slice().reverse()
   const context = buildCourseContext(memory, course?.id)
   const pendingOperations = operations.filter((item) => ['proposed', 'approved', 'failed'].includes(item.status))
+
+  useEffect(() => {
+    const unconsumed = incomingMaterials.filter((item) => item?.name && !consumedMaterialsRef.current.has(`${item.name}:${item.sourceHash || item.byteLength || ''}`))
+    if (!unconsumed.length) return
+    let cancelled = false
+    ;(async () => {
+      let working = memory
+      let lastOperation = null
+      for (const source of unconsumed) {
+        const key = `${source.name}:${source.sourceHash || source.byteLength || ''}`
+        consumedMaterialsRef.current.add(key)
+        const routed = courseFromRoute(working, { courseId: source.courseId, courseLabel: source.courseLabel, confidence: 1, evidence: source.routeEvidence || source.sourceRouteEvidence || `user-confirmed class for ${source.name}` })
+        if (source.sourceHash && working.operations.some((item) => item.type === 'ingest_course_material' && item.courseId === routed.route.courseId && item.contentHash === source.sourceHash && item.status !== 'cancelled')) continue
+        const operation = await proposeMaterialIngest(routed.memory, { courseId: routed.route.courseId, name: source.name, sourceType: source.sourceType || 'syllabus', originalContent: source.originalContent, originalBytesBase64: source.originalBytesBase64, byteLength: source.byteLength, extractedText: source.text || '', derivedAssignments: source.derivedAssignments || [], parseStatus: source.parseStatus || 'parsed', sourceHash: source.sourceHash || '' })
+        working = addOperation(routed.memory, operation)
+        lastOperation = operation
+      }
+      if (!cancelled) {
+        setMemory(working)
+        if (lastOperation) { setProposal(lastOperation); setView('operations'); showNotice('archive proposal ready · review the exact destination before approval') }
+      }
+    })().catch((intakeError) => { if (!cancelled) showError(intakeError.message) })
+    return () => { cancelled = true }
+  }, [incomingMaterials])
 
   function showNotice(message) {
     setError('')
@@ -112,7 +146,7 @@ export default function StudyMemoryWorkspace({ assignments = [], onBack }) {
     try {
       const extracted = await readSyllabusFile(file)
       const originalContent = /\.pdf$/i.test(file.name) ? toBase64(await file.arrayBuffer()) : await file.text()
-      const operation = await proposeMaterialIngest(memory, { courseId: course.id, name: file.name, sourceType: 'course material', originalContent, extractedText: extracted.text })
+      const operation = await proposeMaterialIngest(memory, { courseId: course.id, name: file.name, sourceType: 'course material', originalContent, originalBytesBase64: extracted.originalBytesBase64, byteLength: extracted.byteLength, extractedText: extracted.text })
       setMemory((current) => addOperation(current, operation))
       setProposal(operation)
       showNotice('material proposal ready · original bytes will remain immutable')
@@ -127,18 +161,31 @@ export default function StudyMemoryWorkspace({ assignments = [], onBack }) {
     } catch (exportError) { showError(exportError.message) }
   }
 
-  function approveAndCommit() {
+  async function approveAndCommit() {
     if (!proposal) return
     try {
       const approved = approveOperation(memory, proposal.id)
       let committed = approved.memory
       if (proposal.type === 'save_session') committed = commitOperation(committed, proposal.id, approved.operation.approvalToken)
-      if (proposal.type === 'ingest_course_material') committed = commitMaterialOperation(committed, proposal.id, approved.operation.approvalToken)
+      if (proposal.type === 'ingest_course_material') {
+        if (bridge.endpoint) {
+          const remoteProposal = await proposeStudyMaterial({ endpoint: bridge.endpoint, secret: import.meta.env.VITE_STUDY_BRIDGE_SECRET || '', operation: approved.operation })
+          const remoteApproved = await approveStudyOperation({ endpoint: bridge.endpoint, secret: import.meta.env.VITE_STUDY_BRIDGE_SECRET || '', operationId: remoteProposal.id })
+          const remoteCommitted = await commitStudyOperation({ endpoint: bridge.endpoint, secret: import.meta.env.VITE_STUDY_BRIDGE_SECRET || '', operationId: remoteProposal.id, approvalToken: remoteApproved.approvalToken })
+          if (remoteCommitted.status !== 'committed') throw new Error(remoteCommitted.reason || 'Bridge did not commit the material')
+        } else {
+          await saveMaterialToStudyContext(approved.operation)
+        }
+        committed = commitMaterialOperation(committed, proposal.id, approved.operation.approvalToken)
+      }
       if (proposal.type === 'record_assessment_evidence') committed = commitAssessmentOperation(committed, proposal.id, approved.operation.approvalToken)
       if (proposal.type === 'propose_learner_update') committed = commitOperation(committed, proposal.id, approved.operation.approvalToken)
       setMemory(committed)
       setProposal(null)
-      showNotice(committed.operations.find((item) => item.id === proposal.id)?.status === 'failed' ? 'duplicate retained · no files were overwritten' : 'committed locally · Graphify refresh is pending')
+      const operationResult = committed.operations.find((item) => item.id === proposal.id)
+      if (operationResult?.status === 'failed') showNotice('duplicate retained · no files were overwritten')
+      else if (proposal.type === 'ingest_course_material') showNotice(bridge.endpoint ? 'archive committed · manifest updated' : 'manual archive committed · manifest updated')
+      else showNotice('committed · Graphify refresh is pending')
     } catch (commitError) { showError(commitError.message) }
   }
 
@@ -149,7 +196,7 @@ export default function StudyMemoryWorkspace({ assignments = [], onBack }) {
 
   async function checkBridge() {
     setIsBusy(true); setError('')
-    try { const health = await pingStudyBridge({ endpoint: bridge.endpoint }); await getStudyCourseContext({ endpoint: bridge.endpoint, courseId: course.id }); setBridge({ ...health, contextStatus: 'ready' }); showNotice('bridge ping + course context succeeded · read-only connection verified') } catch (bridgeError) { setBridge({ ...bridge, status: 'offline', message: bridgeError.message }); showError(`${bridgeError.message} · manual export/import remains available`) } finally { setIsBusy(false) }
+    try { const secret = import.meta.env.VITE_STUDY_BRIDGE_SECRET || ''; const health = await pingStudyBridge({ endpoint: bridge.endpoint, secret }); await getStudyCourseContext({ endpoint: bridge.endpoint, courseId: course.id, secret }); setBridge({ ...health, contextStatus: 'ready' }); showNotice('bridge ping + course context succeeded · read-only connection verified') } catch (bridgeError) { setBridge({ ...bridge, status: 'offline', message: bridgeError.message }); showError(`${bridgeError.message} · manual export/import remains available`) } finally { setIsBusy(false) }
   }
 
   function queueClaimChange(claim, action, updates = {}) {
@@ -172,6 +219,37 @@ export default function StudyMemoryWorkspace({ assignments = [], onBack }) {
     showNotice('Graphify refresh queued · Relay remains the canonical evidence reader')
   }
 
+  function openAssignmentImport() {
+    setAssignmentCode(course?.code || '')
+    setAssignmentFile(null)
+    setShowAssignmentImport(true)
+  }
+
+  async function chooseAssignmentFile(event) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    if (!/\.pdf$/i.test(file.name)) { showError('Assignment handoff accepts the original PDF only.'); return }
+    setAssignmentFile(file)
+    return
+    /* legacy proposal path intentionally disabled; confirmation owns proposal creation
+      setMemory((current) => addOperation(routed.memory, operation)); setProposal(operation); setShowAssignmentImport(false); setView('operations'); showNotice('assignment PDF proposal ready · Relay approval is still required')
+    */
+  }
+
+  async function confirmAssignmentFile() {
+    if (!assignmentFile) return
+    setIsBusy(true); setError('')
+    try {
+      const code = assignmentCode.trim()
+      const routed = courseFromRoute(memory, { courseId: code, courseLabel: code, confidence: 1, evidence: 'user-confirmed class for assignment PDF' })
+      if (routed.route.needsClassName || code.length < 2) throw new Error('Enter a valid course code or display name before importing the PDF.')
+      const extracted = await readSyllabusFile(assignmentFile)
+      const operation = await proposeMaterialIngest(routed.memory, { courseId: routed.route.courseId, name: assignmentFile.name, sourceType: 'assignment', originalBytesBase64: extracted.originalBytesBase64, byteLength: extracted.byteLength, extractedText: extracted.text, assignmentId: assignments.find((item) => item.courseId === routed.route.courseId)?.id || null, parseStatus: 'parsed' })
+      setMemory((current) => addOperation(routed.memory, operation)); setProposal(operation); setShowAssignmentImport(false); setAssignmentFile(null); setView('operations'); showNotice('assignment PDF proposal ready · Relay approval is still required')
+    } catch (importError) { showError(importError.message) } finally { setIsBusy(false) }
+  }
+
   return <div className="memory-app">
     <header className="memory-topbar">
       <div className="memory-brand"><span>relay</span><i>/</i><strong>study memory</strong></div>
@@ -184,6 +262,7 @@ export default function StudyMemoryWorkspace({ assignments = [], onBack }) {
         <div className="memory-rail-label">courses</div>
         <div className="memory-courses">{memory.courses.map((item) => <button key={item.id} type="button" className={item.id === course?.id ? 'active' : ''} onClick={() => setCourseId(item.id)}><i className={`memory-course-dot ${item.color}`} /><span><strong>{item.code}</strong><small>{item.name}</small></span></button>)}</div>
         <div className="memory-rail-label">capture</div>
+        <button type="button" className="memory-rail-action" onClick={openAssignmentImport}>+ handoff assignment PDF</button>
         <button type="button" className="memory-rail-action" onClick={() => sessionInputRef.current?.click()}>＋ import study session</button>
         <button type="button" className="memory-rail-action" onClick={() => materialInputRef.current?.click()}>＋ add course material</button>
         <div className="memory-rail-label memory-rail-spacer">review</div>
@@ -203,13 +282,15 @@ export default function StudyMemoryWorkspace({ assignments = [], onBack }) {
         <section className="memory-context-head"><span className="memory-eyebrow">selected course</span><h2>{course?.code}</h2><p>{course?.name} · {course?.term}</p></section>
         <section className="memory-stats"><div><strong>{sessions.length}</strong><span>sessions</span></div><div><strong>{artifacts.length}</strong><span>artifacts</span></div><div><strong>{claims.length}</strong><span>claims</span></div></section>
         <section className="memory-context-section"><div className="memory-section-heading"><span>bounded context</span><small>read only</small></div><p className="memory-context-copy">{context.strengths.length ? `${context.strengths.length} strength${context.strengths.length === 1 ? '' : 's'} · ` : ''}{context.activeStruggles.length} active struggle{context.activeStruggles.length === 1 ? '' : 's'} · {context.recentRepairs.length} repair{context.recentRepairs.length === 1 ? '' : 's'}</p><button type="button" className="memory-text-button" onClick={() => downloadJson(`${course.id}-context.json`, context)}>download context JSON →</button></section>
-        <section className="memory-context-section"><div className="memory-section-heading"><span>folder contract</span><small>v1</small></div><div className="memory-tree"><span>courses/{course?.code}/</span><span>├─ materials/originals/</span><span>├─ sessions/raw/</span><span>├─ sessions/summaries/</span><span>├─ learner/signals/</span><span>└─ operations/journal.jsonl</span></div></section>
+        <section className="memory-context-section"><div className="memory-section-heading"><span>folder contract</span><small>v1</small></div><div className="memory-tree"><span>courses/{course?.code}/</span><span>├─ materials/file-uploaded/</span><span>├─ materials/extracted/</span><span>├─ sessions/raw/</span><span>├─ sessions/summaries/</span><span>├─ learner/signals/</span><span>└─ operations/journal.jsonl</span></div></section>
         <section className="memory-context-section"><div className="memory-section-heading"><span>tutor profile</span><small>cross-course</small></div><p className="memory-context-copy">{memory.skillState?.tutor?.sessionsCommitted || 0} committed session{memory.skillState?.tutor?.sessionsCommitted === 1 ? '' : 's'} observed · refresh in {3 - ((memory.skillState?.tutor?.sessionsCommitted || 0) % 3) || 3}</p><small>Strengths, weaknesses, and improvements refresh every three commits.</small></section>
         <section className="memory-context-footer"><span>graphify adapter</span><strong>{memory.graph.status}</strong><small>Graphify is optional. Relay owns IDs, claims, confidence, provenance, and source links.</small><button type="button" className="memory-outline-button" onClick={queueGraphRefresh}>queue refresh</button></section>
       </aside>
     </div>
     <input ref={sessionInputRef} className="visually-hidden" type="file" accept=".json,.txt,.md,application/json,text/plain,text/markdown" onChange={importSession} />
     <input ref={materialInputRef} className="visually-hidden" type="file" accept=".txt,.md,.csv,.json,.html,.htm,.pdf,text/plain,text/markdown,text/csv,application/json,text/html,application/pdf" onChange={importMaterial} />
+    <input ref={assignmentInputRef} className="visually-hidden" type="file" accept=".pdf,application/pdf" onChange={chooseAssignmentFile} />
+    {showAssignmentImport && <AssignmentImportModalV2 code={assignmentCode} filename={assignmentFile?.name || ''} onCodeChange={setAssignmentCode} onChoose={() => assignmentInputRef.current?.click()} onConfirm={confirmAssignmentFile} onCancel={() => setShowAssignmentImport(false)} />}
     {proposal && <ProposalModal operation={proposal} onApprove={approveAndCommit} onExport={exportBundle} onCancel={cancelProposal} />}
   </div>
 }
@@ -239,4 +320,24 @@ function QuestionForm({ value, onChange, onSubmit, onCancel }) {
 function ProposalModal({ operation, onApprove, onExport, onCancel }) {
   const claims = operation.diff?.learnerClaims || []
   return <div className="memory-modal-backdrop" role="presentation"><section className="memory-proposal" role="dialog" aria-modal="true" aria-labelledby="proposal-title"><div className="memory-proposal-header"><div><span className="memory-eyebrow">{labelFor(operation.type)}</span><h2 id="proposal-title">Review before saving.</h2></div><button type="button" onClick={onCancel} aria-label="Close proposal">×</button></div><div className="memory-proposal-warning"><strong>Nothing has changed yet.</strong><span>Approval creates a short-lived token bound to this exact course, content hash, destinations, and diff.</span></div><div className="memory-proposal-grid"><div><span className="memory-field-label">course</span><strong>{operation.courseId}</strong></div><div><span className="memory-field-label">content hash</span><code>{operation.contentHash || 'derived record'}</code></div><div className="wide"><span className="memory-field-label">destinations</span><ul>{operation.destinationPaths?.map((path) => <li key={path}>{path}</li>)}</ul></div><div className="wide"><span className="memory-field-label">learner-record diff</span>{claims.length ? <ul>{claims.map((claim, index) => <li key={`${claim.type}-${index}`}><span className="memory-claim-type">{labelFor(claim.type)}</span> {claim.text || claim.evidence} <small>· {claim.provenance} · {Math.round((claim.confidence || 0) * 100)}%</small></li>)}</ul> : <p className="memory-muted">No learner claims proposed.</p>}</div>{operation.diff?.warnings?.length > 0 && <div className="wide memory-warning-list"><span className="memory-field-label">missing or uncertain data</span><ul>{operation.diff.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></div>}</div><div className="memory-proposal-footer">{operation.bundle && <button type="button" className="memory-ghost-button" onClick={onExport}>download manual bundle</button>}<span>raw export stays immutable</span><div><button type="button" onClick={onCancel}>cancel</button><button type="button" className="memory-primary-button" onClick={onApprove}>approve &amp; save locally</button></div></div></section></div>
+}
+
+/* Legacy modal removed; the V2 modal below is the only assignment import surface.
+function AssignmentImportModalLegacy({ code, filename, onCodeChange, onChoose, onConfirm, onCancel }) {
+  useEffect(() => {
+    const closeOnEscape = (event) => { if (event.key === 'Escape') onCancel() }
+    document.addEventListener('keydown', closeOnEscape)
+    return () => document.removeEventListener('keydown', closeOnEscape)
+  }, [onCancel])
+  return <div className="memory-modal-backdrop" role="presentation"><section className="memory-proposal memory-assignment-import" role="dialog" aria-modal="true" aria-labelledby="assignment-import-title"><div className="memory-proposal-header"><div><span className="memory-eyebrow">assignment skill handoff</span><h2 id="assignment-import-title">Bring the original PDF.</h2></div><button type="button" onClick={onCancel} aria-label="Close assignment import">×</button></div><div className="memory-proposal-grid"><div className="wide"><p className="memory-muted">ChatGPT cannot write to Windows directly. Select the same original assignment PDF here, confirm its course code, and Relay will propose the course-scoped archive destination before any bytes are written.</p></div><label className="wide memory-upload-label">course code or display name<input autoFocus required value={code} onChange={(event) => onCodeChange(event.target.value)} placeholder="CISC301" /></label><div className="wide"><span className="memory-field-label">destination</span><code>study-context/courses/{code.trim() || '<COURSE>'}/materials/file-uploaded/&lt;original filename&gt;</code></div></div><div className="memory-proposal-footer"><span>original filename and bytes are preserved</span><div><button type="button" onClick={onCancel}>cancel</button><button type="button" className="memory-primary-button" onClick={onChoose} disabled={!code.trim()}>choose original PDF</button></div></div></section></div>
+}
+*/
+
+function AssignmentImportModalV2({ code, filename, onCodeChange, onChoose, onConfirm, onCancel }) {
+  useEffect(() => {
+    const closeOnEscape = (event) => { if (event.key === 'Escape') onCancel() }
+    document.addEventListener('keydown', closeOnEscape)
+    return () => document.removeEventListener('keydown', closeOnEscape)
+  }, [onCancel])
+  return <div className="memory-modal-backdrop" role="presentation"><section className="memory-proposal memory-assignment-import" role="dialog" aria-modal="true" aria-labelledby="assignment-import-title"><div className="memory-proposal-header"><div><span className="memory-eyebrow">assignment skill handoff</span><h2 id="assignment-import-title">Bring the original PDF.</h2></div><button type="button" onClick={onCancel} aria-label="Close assignment import">close</button></div><div className="memory-proposal-grid"><div className="wide"><p className="memory-muted">ChatGPT cannot write to Windows directly. Select the same original assignment PDF here, confirm its course code, and Relay will propose the course-scoped archive destination before any bytes are written.</p></div><div className="wide"><span className="memory-field-label">original filename</span><strong>{filename || 'not selected yet'}</strong></div><label className="wide memory-upload-label">course code or display name<input autoFocus required value={code} onChange={(event) => onCodeChange(event.target.value)} placeholder="CISC301" /></label><div className="wide"><span className="memory-field-label">destination</span><code>study-context/courses/{code.trim() || '<COURSE>'}/materials/file-uploaded/{filename || '<original filename>'}</code></div></div><div className="memory-proposal-footer"><span>original filename and bytes are preserved</span><div><button type="button" onClick={onCancel}>cancel</button><button type="button" onClick={onChoose}>select original PDF</button><button type="button" className="memory-primary-button" onClick={onConfirm} disabled={!code.trim() || !filename}>confirm &amp; propose</button></div></div></section></div>
 }

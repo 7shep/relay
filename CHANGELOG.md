@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.0 - 2026-09-03
+
+### Added
+
+- Upload course materials and assignment PDFs into class-scoped local archives while preserving original filenames and immutable bytes.
+- Route syllabus files independently by class, ask for missing class names in the assistant, and keep archive proposals reviewable before writes.
+
+### Changed
+
+- Keep extracted text, derived assignment metadata, manifests, and archive operation states linked to their source files.
+- Enforce authenticated, approval-bound bridge writes with upload limits, duplicate detection, safe course paths, and a manual browser-based fallback.
+
 ## 0.2.0 - 2026-09-02
 
 ### Added

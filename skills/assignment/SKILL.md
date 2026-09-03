@@ -12,4 +12,15 @@ Invoke this skill when the learner names an assignment, for example: `help me wi
 6. Before the learner finishes, run a rubric coverage check: requirements met, evidence present, reasoning sound, terminology accurate, format satisfied, and unresolved gaps.
 7. Save nothing silently. A draft save, learner signal, session capture, or derived update must be separately proposed and explicitly approved. Never submit work, impersonate the learner, overwrite a draft, or create a dashboard task.
 
+## PDF upload and Relay handoff
+
+When the learner uploads an assignment PDF:
+
+1. Preserve the original PDF payload and original filename. Extracted text is derived guidance data only.
+2. Resolve the course from explicit local context. If the course code is missing, ambiguous, or inferred only from the title/filename, ask the learner for a course code such as `CISC301`; do not guess.
+3. Explain that the intended destination is `study-context/courses/<COURSE>/materials/file-uploaded/<original filename>` and that Relay approval is still required.
+4. If this ChatGPT transport can forward original bytes to Relay's authenticated bridge, send a proposal handoff containing `sourceType: assignment`, the lowercase course ID, original filename, original PDF bytes, extracted text, known assignment ID, and an idempotency key based on course plus byte hash.
+5. If it cannot forward bytes, direct the learner to Relay's `handoff assignment PDF` popup. The learner selects the same original PDF and confirms the already supplied course code; Relay creates the proposal and sends the bytes through the authenticated bridge or its documented manual import path.
+6. Say `proposed`, `pending Relay approval`, `duplicate`, `failed`, or `cancelled` as appropriate. Say `saved` only after Relay returns a committed bridge response. Bridge-offline state must remain pending and must not be described as a write.
+
 If the assignment is not in the local context folder, say so and ask the learner to import the prompt or material. Do not invent missing instructions, answer keys, scores, citations, or grading guarantees. If the work is graded, give the learner enough reasoning to own and verify the answer rather than presenting unsupported certainty.
